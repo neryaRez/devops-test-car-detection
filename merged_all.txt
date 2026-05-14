@@ -1,0 +1,3772 @@
+
+--- START: Dockerfile ---
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libglib2.0-0 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY detector/ /app/detector/
+
+CMD ["python", "-m", "detector.app"]
+--- END: Dockerfile ---
+
+--- START: Jenkinsfile ---
+
+--- END: Jenkinsfile ---
+
+--- START: README.md ---
+# Car detector (YOLOv8) — DevOps test repo
+
+Fork-friendly layout: Python detector, Docker, Helm skeleton, Terraform (3 stacks), optional one-shot `scripts/bootstrap.sh`.
+
+## Defaults
+
+- **AWS region:** `us-east-1` everywhere unless you set `AWS_REGION` / `TF_VAR_aws_region` / Terraform `-var=aws_region=...`.
+- **AWS CLI + profile:** configure credentials as usual (`aws configure` or env vars); nothing account-specific is committed.
+
+## Quick paths
+
+| Goal | Where |
+|------|--------|
+| Run detector locally / in Docker | `docker compose` + env from `config/.env.example` |
+| Unit tests | `python3 -m pytest` (repo root; see `pyproject.toml`) |
+| Infra one-shot | `chmod +x scripts/*.sh` then `./scripts/bootstrap.sh` (see `docs/aws-region-and-bootstrap.md`) |
+| Trigger Jenkins only | `./scripts/trigger-jenkins.sh` |
+| Background docs | `docs/README.md` |
+
+## Fork and bootstrap (generic)
+
+```bash
+git clone https://github.com/YOUR_USER/devops-test-car-detection.git
+cd devops-test-car-detection
+chmod +x scripts/bootstrap.sh scripts/trigger-jenkins.sh
+
+# Optional: another region
+# export AWS_REGION=eu-central-1
+
+# Creates: remote state bucket → VPC + ECR + app S3 (+ optional EKS / Jenkins / job trigger via env vars)
+AUTO_APPROVE=1 ./scripts/bootstrap.sh --yes
+```
+
+Prerequisites: **Terraform ≥ 1.5**, **aws-cli**, **jq**, **openssl**.
+
+## Submission / test account (FAQ)
+
+See **`docs/submission-and-aws-accounts.md`**. Short version: many employers **give you** their test account; supplying **your own** account to **them** is only OK if they say so—otherwise use their access or ask.
+--- END: README.md ---
+
+--- START: docker-compose.yml ---
+services:
+  detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${CAR_DETECTOR_IMAGE:-car-detector:local}
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_VIDEO_URI: ${S3_VIDEO_URI:-}
+      S3_LABELS_URI: ${S3_LABELS_URI:-}
+      S3_OUTPUT_PREFIX_URI: ${S3_OUTPUT_PREFIX_URI:-}
+      S3_METRICS_URI: ${S3_METRICS_URI:-}
+      S3_RUN_LOG_URI: ${S3_RUN_LOG_URI:-}
+      YOLO_MODEL: ${YOLO_MODEL:-yolov8n.pt}
+      YOLO_DEVICE: ${YOLO_DEVICE:-}
+      CONF_THRESHOLD: ${CONF_THRESHOLD:-0.25}
+      IOU_THRESHOLD: ${IOU_THRESHOLD:-0.5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+--- END: docker-compose.yml ---
+
+--- START: requirements.txt ---
+boto3>=1.34.0,<2
+numpy>=1.24.0,<3
+opencv-python-headless>=4.8.0,<5
+ultralytics>=8.1.0,<9
+torch>=2.1.0,<3
+torchvision>=0.16.0,<1
+pytest>=8.0.0,<9
+--- END: requirements.txt ---
+
+--- START: config/.env.example ---
+# Copy to .env (not committed) or export in your shell. Never commit real credentials.
+
+# Default matches Terraform / scripts; override for other regions.
+AWS_REGION=us-east-1
+# Prefer IAM roles (EKS IRSA, instance profile). For local only, session keys:
+# AWS_ACCESS_KEY_ID=
+# AWS_SECRET_ACCESS_KEY=
+# AWS_SESSION_TOKEN=
+
+# Input objects (provided by the test org in your AWS account — not in this git repo)
+S3_VIDEO_URI=s3://your-bucket/path/video.mp4
+S3_LABELS_URI=s3://your-bucket/path/labels.json
+
+# Either set a prefix (metrics.json + run.log written under it) or set S3_METRICS_URI explicitly
+S3_OUTPUT_PREFIX_URI=s3://your-bucket/path/runs/example-run/
+
+# Optional overrides
+# S3_METRICS_URI=
+# S3_RUN_LOG_URI=
+YOLO_MODEL=yolov8n.pt
+YOLO_DEVICE=
+CONF_THRESHOLD=0.25
+IOU_THRESHOLD=0.5
+LOG_LEVEL=INFO
+--- END: config/.env.example ---
+
+--- START: helm/car-detector/Chart.yaml ---
+
+--- END: helm/car-detector/Chart.yaml ---
+
+--- START: helm/car-detector/values.yaml ---
+
+--- END: helm/car-detector/values.yaml ---
+
+--- START: terraform/state-backend/main.tf ---
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+module "remote_state" {
+  source = "../modules/remote_state_backend"
+
+  name_prefix   = var.name_prefix
+  bucket_suffix = var.bucket_suffix
+  aws_region    = var.aws_region
+}
+--- END: terraform/state-backend/main.tf ---
+
+--- START: terraform/state-backend/outputs.tf ---
+output "state_bucket_name" {
+  value = module.remote_state.state_bucket_name
+}
+
+output "lock_table_name" {
+  value = module.remote_state.lock_table_name
+}
+
+output "backend_hcl_snippet" {
+  value = module.remote_state.backend_hcl_snippet
+}
+--- END: terraform/state-backend/outputs.tf ---
+
+--- START: terraform/state-backend/variables.tf ---
+variable "aws_region" {
+  type        = string
+  description = "AWS region"
+  default     = "us-east-1"
+}
+
+variable "name_prefix" {
+  type        = string
+  description = "Prefix for state bucket and lock table names"
+  default     = "car-detector"
+}
+
+variable "bucket_suffix" {
+  type        = string
+  description = "Unique suffix for the Terraform state bucket name (globally unique)."
+}
+--- END: terraform/state-backend/variables.tf ---
+
+--- START: terraform/jenkins/main.tf ---
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  backend "s3" {}
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+resource "aws_security_group" "jenkins" {
+  name_prefix = "${var.name_prefix}-jenkins-"
+  description = "Jenkins controller (adjust ingress to your IP ranges)"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]
+  }
+
+  ingress {
+    description = "Jenkins UI"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-jenkins-sg"
+  }
+}
+
+resource "aws_instance" "jenkins" {
+  ami                    = data.aws_ami.ubuntu.id
+  instance_type          = var.instance_type
+  subnet_id              = var.subnet_id
+  vpc_security_group_ids = [aws_security_group.jenkins.id]
+  key_name               = var.ssh_key_name != "" ? var.ssh_key_name : null
+
+  root_block_device {
+    volume_size = var.root_volume_gb
+    volume_type = "gp3"
+  }
+
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-jenkins"
+    Role = "jenkins-controller"
+  }
+}
+--- END: terraform/jenkins/main.tf ---
+
+--- START: terraform/jenkins/outputs.tf ---
+output "jenkins_private_ip" {
+  value       = aws_instance.jenkins.private_ip
+  description = "Use SSM session manager or bastion if instance has no public IP in a private subnet."
+}
+
+output "jenkins_instance_id" {
+  value = aws_instance.jenkins.id
+}
+--- END: terraform/jenkins/outputs.tf ---
+
+--- START: terraform/jenkins/variables.tf ---
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "name_prefix" {
+  type    = string
+  default = "car-detector"
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "VPC from platform stack (e.g. module output)."
+}
+
+variable "subnet_id" {
+  type        = string
+  description = "Public subnet for the Jenkins EC2 instance."
+}
+
+variable "admin_cidr" {
+  type        = string
+  description = "CIDR allowed to reach SSH (22) and Jenkins (8080), e.g. 203.0.113.10/32"
+  default     = "0.0.0.0/0"
+}
+
+variable "instance_type" {
+  type    = string
+  default = "t3.medium"
+}
+
+variable "ssh_key_name" {
+  type        = string
+  description = "Optional EC2 key pair name for SSH."
+  default     = ""
+}
+
+variable "root_volume_gb" {
+  type    = number
+  default = 50
+}
+--- END: terraform/jenkins/variables.tf ---
+
+--- START: terraform/modules/s3_app_data/main.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "bucket_suffix" {
+  type        = string
+  description = "Suffix to keep bucket name globally unique."
+}
+
+resource "aws_s3_bucket" "app" {
+  bucket = "${var.name_prefix}-app-${var.bucket_suffix}"
+
+  tags = {
+    Name    = "${var.name_prefix}-app-data"
+    Purpose = "datasets-metrics-artifacts"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "app" {
+  bucket = aws_s3_bucket.app.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "app" {
+  bucket = aws_s3_bucket.app.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "app" {
+  bucket = aws_s3_bucket.app.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+--- END: terraform/modules/s3_app_data/main.tf ---
+
+--- START: terraform/modules/s3_app_data/outputs.tf ---
+output "bucket_id" {
+  value = aws_s3_bucket.app.id
+}
+
+output "bucket_arn" {
+  value = aws_s3_bucket.app.arn
+}
+--- END: terraform/modules/s3_app_data/outputs.tf ---
+
+--- START: terraform/modules/s3_app_data/variables.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "bucket_suffix" {
+  type = string
+}
+--- END: terraform/modules/s3_app_data/variables.tf ---
+
+--- START: terraform/modules/remote_state_backend/main.tf ---
+resource "aws_s3_bucket" "tfstate" {
+  bucket = "${var.name_prefix}-tfstate-${var.bucket_suffix}"
+
+  tags = {
+    Name        = "${var.name_prefix}-terraform-state"
+    Purpose     = "terraform-remote-state"
+    Environment = "shared"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_dynamodb_table" "tf_lock" {
+  name         = "${var.name_prefix}-tf-locks"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "LockID"
+
+  attribute {
+    name = "LockID"
+    type = "S"
+  }
+
+  tags = {
+    Name        = "${var.name_prefix}-tf-locks"
+    Purpose     = "terraform-state-lock"
+    Environment = "shared"
+  }
+}
+--- END: terraform/modules/remote_state_backend/main.tf ---
+
+--- START: terraform/modules/remote_state_backend/outputs.tf ---
+output "state_bucket_name" {
+  value = aws_s3_bucket.tfstate.bucket
+}
+
+output "lock_table_name" {
+  value = aws_dynamodb_table.tf_lock.name
+}
+
+output "backend_hcl_snippet" {
+  description = "Paste into platform/backend.tf after first bootstrap apply."
+  value       = <<-EOT
+    terraform {
+      backend "s3" {
+        bucket         = "${aws_s3_bucket.tfstate.bucket}"
+        key            = "platform/terraform.tfstate"
+        region         = "${var.aws_region}"
+        dynamodb_table = "${aws_dynamodb_table.tf_lock.name}"
+        encrypt        = true
+      }
+    }
+  EOT
+}
+--- END: terraform/modules/remote_state_backend/outputs.tf ---
+
+--- START: terraform/modules/remote_state_backend/variables.tf ---
+variable "name_prefix" {
+  type        = string
+  description = "Short name prefix for the DynamoDB table and bucket name stem."
+}
+
+variable "bucket_suffix" {
+  type        = string
+  description = "Globally unique suffix for the state bucket (S3 bucket names are global)."
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region for resources."
+}
+--- END: terraform/modules/remote_state_backend/variables.tf ---
+
+--- START: terraform/modules/network/main.tf ---
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "${var.name_prefix}-vpc"
+  }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+  tags = {
+    Name = "${var.name_prefix}-igw"
+  }
+}
+
+resource "aws_subnet" "public" {
+  count = 2
+
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 4, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.name_prefix}-public-${count.index}"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+--- END: terraform/modules/network/main.tf ---
+
+--- START: terraform/modules/network/outputs.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.42.0.0/16"
+}
+
+output "vpc_id" {
+  value = aws_vpc.this.id
+}
+
+output "public_subnet_ids" {
+  value = aws_subnet.public[*].id
+}
+--- END: terraform/modules/network/outputs.tf ---
+
+--- START: terraform/modules/network/variables.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.42.0.0/16"
+}
+--- END: terraform/modules/network/variables.tf ---
+
+--- START: terraform/modules/eks/main.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "subnet_ids" {
+  type        = list(string)
+  description = "Subnet IDs for the EKS control plane and nodes (use public subnets for this scaffold)."
+}
+
+variable "cluster_version" {
+  type        = string
+  description = "EKS Kubernetes version"
+  default     = "1.29"
+}
+
+module "cluster" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.8"
+
+  cluster_name    = "${var.name_prefix}-eks"
+  cluster_version = var.cluster_version
+
+  vpc_id     = var.vpc_id
+  subnet_ids = var.subnet_ids
+
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = false
+
+  eks_managed_node_groups = {
+    default = {
+      name           = "${var.name_prefix}-default"
+      instance_types = ["t3.medium"]
+      min_size       = 1
+      max_size       = 4
+      desired_size   = 2
+    }
+  }
+
+  tags = {
+    Name        = "${var.name_prefix}-eks"
+    Environment = "test"
+  }
+}
+--- END: terraform/modules/eks/main.tf ---
+
+--- START: terraform/modules/eks/outputs.tf ---
+output "cluster_name" {
+  value = module.cluster.cluster_name
+}
+
+output "cluster_endpoint" {
+  value = module.cluster.cluster_endpoint
+}
+
+output "cluster_certificate_authority_data" {
+  value     = module.cluster.cluster_certificate_authority_data
+  sensitive = true
+}
+
+output "oidc_provider_arn" {
+  value = module.cluster.oidc_provider_arn
+}
+--- END: terraform/modules/eks/outputs.tf ---
+
+--- START: terraform/modules/eks/variables.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+variable "vpc_id" {
+  type = string
+}
+
+variable "subnet_ids" {
+  type        = list(string)
+  description = "Subnet IDs for the EKS control plane and nodes (use public subnets for this scaffold)."
+}
+
+variable "cluster_version" {
+  type        = string
+  description = "EKS Kubernetes version"
+  default     = "1.29"
+}
+--- END: terraform/modules/eks/variables.tf ---
+
+--- START: terraform/modules/ecr/main.tf ---
+variable "name_prefix" {
+  type = string
+}
+
+resource "aws_ecr_repository" "car_detector" {
+  name                 = "${var.name_prefix}-car-detector"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-car-detector"
+  }
+}
+--- END: terraform/modules/ecr/main.tf ---
+
+--- START: terraform/modules/ecr/outputs.tf ---
+output "repository_url" {
+  value = aws_ecr_repository.car_detector.repository_url
+}
+
+output "repository_arn" {
+  value = aws_ecr_repository.car_detector.arn
+}
+--- END: terraform/modules/ecr/outputs.tf ---
+
+--- START: terraform/modules/ecr/variables.tf ---
+variable "name_prefix" {
+  type = string
+}
+--- END: terraform/modules/ecr/variables.tf ---
+
+--- START: terraform/platform/backend.tf.example ---
+# Copy to backend.tf after state-backend stack is applied. Do not commit backend.tf if it embeds secrets (it should not).
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_WITH_STATE_BUCKET"
+    key            = "platform/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "REPLACE_WITH_LOCK_TABLE"
+    encrypt        = true
+  }
+}
+--- END: terraform/platform/backend.tf.example ---
+
+--- START: terraform/platform/main.tf ---
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  # Values supplied at `terraform init` via `-backend-config` (see scripts/bootstrap.sh).
+  backend "s3" {}
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+module "network" {
+  source      = "../modules/network"
+  name_prefix = var.name_prefix
+  vpc_cidr    = var.vpc_cidr
+}
+
+module "ecr" {
+  source      = "../modules/ecr"
+  name_prefix = var.name_prefix
+}
+
+module "s3_app_data" {
+  source          = "../modules/s3_app_data"
+  name_prefix     = var.name_prefix
+  bucket_suffix   = var.app_bucket_suffix
+}
+
+module "eks" {
+  count  = var.enable_eks ? 1 : 0
+  source = "../modules/eks"
+
+  name_prefix       = var.name_prefix
+  vpc_id            = module.network.vpc_id
+  subnet_ids        = module.network.public_subnet_ids
+  cluster_version   = var.eks_cluster_version
+}
+--- END: terraform/platform/main.tf ---
+
+--- START: terraform/platform/outputs.tf ---
+output "vpc_id" {
+  value = module.network.vpc_id
+}
+
+output "public_subnet_ids" {
+  value = module.network.public_subnet_ids
+}
+
+output "ecr_repository_url" {
+  value = module.ecr.repository_url
+}
+
+output "app_data_bucket_id" {
+  value = module.s3_app_data.bucket_id
+}
+
+output "eks_cluster_name" {
+  value = try(module.eks[0].cluster_name, null)
+}
+
+output "eks_cluster_endpoint" {
+  value = try(module.eks[0].cluster_endpoint, null)
+}
+--- END: terraform/platform/outputs.tf ---
+
+--- START: terraform/platform/variables.tf ---
+variable "aws_region" {
+  type    = string
+  default = "us-east-1"
+}
+
+variable "name_prefix" {
+  type    = string
+  default = "car-detector"
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.42.0.0/16"
+}
+
+variable "app_bucket_suffix" {
+  type        = string
+  description = "Globally unique suffix for the application data bucket."
+}
+
+variable "enable_eks" {
+  type        = bool
+  description = "Set true to create EKS (downloads terraform-aws-modules/eks; takes longer to plan/apply)."
+  default     = false
+}
+
+variable "eks_cluster_version" {
+  type    = string
+  default = "1.29"
+}
+--- END: terraform/platform/variables.tf ---
+
+--- START: tests/test_metrics.py ---
+import json
+from pathlib import Path
+
+import numpy as np
+
+from detector.evaluation import (
+    confusion_and_rates_from_counts,
+    evaluate_video_frames,
+    greedy_match,
+    iou_xyxy,
+)
+from detector.labels import load_labels_json
+
+
+def test_iou_xyxy_perfect_overlap():
+    a = [0.0, 0.0, 10.0, 10.0]
+    b = [0.0, 0.0, 10.0, 10.0]
+    assert abs(iou_xyxy(a, b) - 1.0) < 1e-6
+
+
+def test_iou_xyxy_no_overlap():
+    a = [0.0, 0.0, 10.0, 10.0]
+    b = [20.0, 20.0, 30.0, 30.0]
+    assert iou_xyxy(a, b) == 0.0
+
+
+def test_greedy_match_simple_tp_fp_fn():
+    gts = np.array([[0.0, 0.0, 10.0, 10.0]], dtype=np.float32)
+    preds = np.array([[0.0, 0.0, 10.0, 10.0], [50.0, 50.0, 60.0, 60.0]], dtype=np.float32)
+    scores = np.array([0.9, 0.8], dtype=np.float32)
+    tp, fp, fn = greedy_match(preds, scores, gts, iou_threshold=0.5)
+    assert (tp, fp, fn) == (1, 1, 0)
+
+
+def test_greedy_match_two_gt_one_pred():
+    gts = np.array([[0.0, 0.0, 10.0, 10.0], [20.0, 0.0, 30.0, 10.0]], dtype=np.float32)
+    preds = np.array([[0.0, 0.0, 10.0, 10.0]], dtype=np.float32)
+    scores = np.array([0.9], dtype=np.float32)
+    tp, fp, fn = greedy_match(preds, scores, gts, iou_threshold=0.5)
+    assert (tp, fp, fn) == (1, 0, 1)
+
+
+def test_load_labels_dict_and_list(tmp_path: Path):
+    p1 = tmp_path / "l1.json"
+    p1.write_text(
+        json.dumps({"frames": {"0": [[0, 0, 1, 1]], "1": []}}),
+        encoding="utf-8",
+    )
+    m1 = load_labels_json(p1)
+    assert 0 in m1 and 1 in m1
+    assert m1[0].shape == (1, 4)
+    assert m1[1].shape == (0, 4)
+
+    p2 = tmp_path / "l2.json"
+    p2.write_text(
+        json.dumps(
+            {
+                "frames": [
+                    {"frame_index": 0, "boxes_xyxy": [[0, 0, 2, 2]]},
+                    {"frame_index": 2, "boxes_xyxy": []},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    m2 = load_labels_json(p2)
+    assert 0 in m2 and 2 in m2
+    assert 1 not in m2
+
+
+def test_evaluate_video_frames_counts():
+    labels = {0: np.array([[0, 0, 10, 10]], dtype=np.float32), 1: np.zeros((0, 4), dtype=np.float32)}
+    preds = {
+        0: (np.array([[0, 0, 10, 10]], dtype=np.float32), np.array([0.9], dtype=np.float32)),
+        1: (np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.float32)),
+    }
+    rows, bbox_m, frame_m = evaluate_video_frames(preds, labels, max_frame_index=1, iou_threshold=0.5)
+    assert len(rows) == 2
+    assert bbox_m["tp"] == 1
+    assert bbox_m["fp"] == 0
+    assert bbox_m["fn"] == 0
+    assert frame_m["counts"]["tp"] == 1  # frame0 both present
+    assert frame_m["counts"]["tn"] == 1  # frame1 both absent
+
+
+def test_confusion_and_rates_from_counts():
+    out = confusion_and_rates_from_counts(tp=2, fp=1, fn=1, tn=4)
+    assert out["confusion_matrix"] == [[4, 1], [1, 2]]
+    assert abs(out["precision"] - (2 / 3)) < 1e-9
+    assert abs(out["recall"] - (2 / 3)) < 1e-9
+    assert abs(out["accuracy"] - (6 / 8)) < 1e-9
+--- END: tests/test_metrics.py ---
+
+--- START: detector/__init__.py ---
+# Car detection service package (YOLOv8).
+--- END: detector/__init__.py ---
+
+--- START: detector/app.py ---
+"""
+Entry module for `python -m detector.app` (Docker CMD).
+
+Implementation lives in focused modules: `cli`, `evaluation`, `labels`, `s3_io`, `constants`.
+"""
+
+from __future__ import annotations
+
+from detector.cli import main, run
+
+__all__ = ["main", "run"]
+
+if __name__ == "__main__":
+    main()
+--- END: detector/app.py ---
+
+--- START: detector/cli.py ---
+"""CLI and end-to-end run: S3 download → YOLOv8 car inference → metrics → S3 upload."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+
+from detector.constants import COCO_CAR_CLASS_ID
+from detector.evaluation import evaluate_video_frames
+from detector.labels import load_labels_json
+from detector.logging_utils import LOGGER, configure_logging
+from detector.s3_io import (
+    download_s3_object,
+    ensure_s3_prefix_uri,
+    put_s3_json,
+    put_s3_text,
+)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="YOLOv8 car-only video detector with S3 IO + metrics")
+    p.add_argument("--s3-video-uri", default=os.environ.get("S3_VIDEO_URI"), help="s3://bucket/key.mp4")
+    p.add_argument("--s3-labels-uri", default=os.environ.get("S3_LABELS_URI"), help="s3://bucket/key.json")
+    p.add_argument(
+        "--s3-output-prefix-uri",
+        default=os.environ.get("S3_OUTPUT_PREFIX_URI"),
+        help="s3://bucket/prefix/ (metrics + logs written under this prefix)",
+    )
+    p.add_argument("--s3-metrics-uri", default=os.environ.get("S3_METRICS_URI"), help="Optional explicit s3://bucket/key.json")
+    p.add_argument("--s3-run-log-uri", default=os.environ.get("S3_RUN_LOG_URI"), help="Optional explicit s3://bucket/key.log")
+    p.add_argument("--yolo-model", default=os.environ.get("YOLO_MODEL", "yolov8n.pt"))
+    p.add_argument("--conf", type=float, default=float(os.environ.get("CONF_THRESHOLD", "0.25")))
+    p.add_argument("--iou-threshold", type=float, default=float(os.environ.get("IOU_THRESHOLD", "0.5")))
+    p.add_argument("--device", default=os.environ.get("YOLO_DEVICE", ""), help="Optional: cpu, 0, cuda:0, ...")
+    return p
+
+
+def require_non_empty(name: str, value: Optional[str]) -> str:
+    if not value:
+        raise SystemExit(f"Missing required value for {name} (env or CLI).")
+    return value
+
+
+def run() -> int:
+    configure_logging()
+    args = build_arg_parser().parse_args()
+
+    video_uri = require_non_empty("S3_VIDEO_URI", args.s3_video_uri)
+    labels_uri = require_non_empty("S3_LABELS_URI", args.s3_labels_uri)
+    output_prefix = args.s3_output_prefix_uri
+    metrics_uri = args.s3_metrics_uri
+    run_log_uri = args.s3_run_log_uri
+
+    if not output_prefix and not metrics_uri:
+        raise SystemExit("Provide S3_OUTPUT_PREFIX_URI or S3_METRICS_URI.")
+
+    import boto3
+
+    s3 = boto3.client("s3")
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="car-detector-"))
+    video_path = tmpdir / "input_video.mp4"
+    labels_path = tmpdir / "labels.json"
+
+    try:
+        download_s3_object(video_uri, video_path, s3)
+        download_s3_object(labels_uri, labels_path, s3)
+        labels_by_frame = load_labels_json(labels_path)
+
+        from ultralytics import YOLO
+
+        device = args.device or None
+        model = YOLO(args.yolo_model)
+        LOGGER.info("Loaded model %s; filtering to COCO car class id=%s", args.yolo_model, COCO_CAR_CLASS_ID)
+
+        pred_boxes_by_frame: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        frame_indices: List[int] = []
+
+        t0 = time.time()
+        for frame_index, result in enumerate(
+            model.predict(
+                source=str(video_path),
+                stream=True,
+                verbose=False,
+                conf=float(args.conf),
+                classes=[COCO_CAR_CLASS_ID],
+                device=device,
+            )
+        ):
+            frame_indices.append(frame_index)
+            boxes = getattr(result, "boxes", None)
+            if boxes is None or boxes.xyxy is None or len(boxes) == 0:
+                pred_boxes_by_frame[frame_index] = (np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.float32))
+                continue
+            xyxy = boxes.xyxy.cpu().numpy().astype(np.float32)
+            scores = boxes.conf.cpu().numpy().astype(np.float32)
+            pred_boxes_by_frame[frame_index] = (xyxy, scores)
+
+        infer_s = max(1e-6, time.time() - t0)
+        max_frame = max(frame_indices) if frame_indices else -1
+        label_max_frame = max(labels_by_frame.keys()) if labels_by_frame else -1
+        max_frame_index = max(max_frame, label_max_frame)
+        if max_frame_index < 0:
+            max_frame_index = 0
+
+        for fi in range(max_frame_index + 1):
+            pred_boxes_by_frame.setdefault(fi, (np.zeros((0, 4), dtype=np.float32), np.zeros((0,), dtype=np.float32)))
+
+        frame_rows, bbox_metrics, frame_rates = evaluate_video_frames(
+            pred_boxes_by_frame=pred_boxes_by_frame,
+            labels_by_frame=labels_by_frame,
+            max_frame_index=max_frame_index,
+            iou_threshold=float(args.iou_threshold),
+        )
+
+        metrics_payload: Dict[str, Any] = {
+            "schema_version": 1,
+            "video_uri": video_uri,
+            "labels_uri": labels_uri,
+            "model": args.yolo_model,
+            "conf_threshold": float(args.conf),
+            "iou_match_threshold": float(args.iou_threshold),
+            "coco_car_class_id": int(COCO_CAR_CLASS_ID),
+            "frames_inferred": int(len(frame_indices)),
+            "max_frame_index": int(max_frame_index),
+            "inference_seconds": float(infer_s),
+            "bbox_metrics": bbox_metrics,
+            "frame_presence_metrics": frame_rates,
+            "per_frame": [fr.__dict__ for fr in frame_rows],
+        }
+
+        log_lines = [
+            "Car detector run complete",
+            f"video_uri={video_uri}",
+            f"labels_uri={labels_uri}",
+            f"model={args.yolo_model}",
+            f"bbox_precision={bbox_metrics['precision']:.6f}",
+            f"bbox_recall={bbox_metrics['recall']:.6f}",
+            f"bbox_f1={bbox_metrics['f1']:.6f}",
+            "frame_presence_confusion_matrix=" + json.dumps(frame_rates["confusion_matrix"]),
+            f"frame_presence_precision={frame_rates['precision']:.6f}",
+            f"frame_presence_recall={frame_rates['recall']:.6f}",
+            f"frame_presence_accuracy={frame_rates['accuracy']:.6f}",
+        ]
+        log_text = "\n".join(log_lines) + "\n"
+        LOGGER.info("%s", log_text.strip())
+
+        if metrics_uri:
+            m_uri = metrics_uri
+        else:
+            out_bucket, out_prefix = ensure_s3_prefix_uri(require_non_empty("S3_OUTPUT_PREFIX_URI", output_prefix))
+            m_uri = f"s3://{out_bucket}/{out_prefix}metrics.json"
+
+        put_s3_json(m_uri, metrics_payload, s3)
+
+        if run_log_uri:
+            put_s3_text(run_log_uri, log_text, s3)
+        elif output_prefix:
+            out_bucket, out_prefix = ensure_s3_prefix_uri(output_prefix)
+            l_uri = f"s3://{out_bucket}/{out_prefix}run.log"
+            put_s3_text(l_uri, log_text, s3)
+
+        print("CONFUSION_MATRIX_FRAME_PRESENCE:", json.dumps(frame_rates["confusion_matrix"]))
+        print("PRECISION_BBOX:", f"{bbox_metrics['precision']:.6f}")
+        print("RECALL_BBOX:", f"{bbox_metrics['recall']:.6f}")
+        print("ACCURACY_FRAME_PRESENCE:", f"{frame_rates['accuracy']:.6f}")
+        print("ACCURACY_BBOX_MICRO:", f"{bbox_metrics['micro_accuracy']:.6f}")
+        print("METRICS_URI:", m_uri)
+        return 0
+    finally:
+        try:
+            for pth in tmpdir.rglob("*"):
+                if pth.is_file():
+                    pth.unlink(missing_ok=True)  # type: ignore[arg-type]
+            tmpdir.rmdir()
+        except OSError:
+            LOGGER.warning("Could not fully clean temp dir: %s", tmpdir)
+
+
+def main() -> None:
+    raise SystemExit(run())
+--- END: detector/cli.py ---
+
+--- START: detector/constants.py ---
+"""Shared constants for YOLO / COCO alignment."""
+
+# COCO class id for "car" in default YOLOv8 COCO checkpoints (Ultralytics).
+COCO_CAR_CLASS_ID = 2
+--- END: detector/constants.py ---
+
+--- START: detector/evaluation.py ---
+"""Bounding-box IoU matching, frame-level aggregation, and confusion metrics."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
+
+import numpy as np
+
+from detector.labels import boxes_for_frame
+
+
+def iou_xyxy(a: Sequence[float], b: Sequence[float]) -> float:
+    ax1, ay1, ax2, ay2 = map(float, a)
+    bx1, by1, bx2, by2 = map(float, b)
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    iw = max(0.0, inter_x2 - inter_x1)
+    ih = max(0.0, inter_y2 - inter_y1)
+    inter = iw * ih
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    if union <= 0.0:
+        return 0.0
+    return float(inter / union)
+
+
+def greedy_match(
+    preds: np.ndarray,
+    pred_scores: np.ndarray,
+    gts: np.ndarray,
+    iou_threshold: float,
+) -> Tuple[int, int, int]:
+    """
+    Greedy IoU matching (sorted by descending confidence).
+    Returns (tp, fp, fn) at the bounding-box level for a single frame / image.
+    """
+    if preds.size == 0 and gts.size == 0:
+        return 0, 0, 0
+    if preds.size == 0:
+        return 0, 0, int(len(gts))
+    if gts.size == 0:
+        return 0, int(len(preds)), 0
+
+    order = np.argsort(-pred_scores)
+    preds = preds[order]
+    pred_scores = pred_scores[order]
+
+    gt_used = np.zeros(len(gts), dtype=bool)
+    tp = 0
+    fp = 0
+
+    for pb in preds:
+        best_j = -1
+        best_iou = 0.0
+        for j, gb in enumerate(gts):
+            if gt_used[j]:
+                continue
+            v = iou_xyxy(pb, gb)
+            if v > best_iou:
+                best_iou = v
+                best_j = j
+        if best_j >= 0 and best_iou >= iou_threshold:
+            gt_used[best_j] = True
+            tp += 1
+        else:
+            fp += 1
+
+    fn = int(np.count_nonzero(~gt_used))
+    return tp, fp, fn
+
+
+def confusion_and_rates_from_counts(tp: int, fp: int, fn: int, tn: int) -> Dict[str, Any]:
+    total = tp + fp + fn + tn
+    precision = float(tp / (tp + fp)) if (tp + fp) > 0 else 0.0
+    recall = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+    accuracy = float((tp + tn) / total) if total > 0 else 0.0
+    # sklearn-style labels: [negative, positive] -> rows actual, cols predicted
+    cm = np.array([[tn, fp], [fn, tp]], dtype=np.int64)
+    return {
+        "confusion_matrix": cm.tolist(),
+        "confusion_matrix_labels": {
+            "rows": ["actual_negative", "actual_positive"],
+            "cols": ["predicted_negative", "predicted_positive"],
+        },
+        "precision": precision,
+        "recall": recall,
+        "accuracy": accuracy,
+        "counts": {"tp": tp, "fp": fp, "fn": fn, "tn": tn, "total": total},
+    }
+
+
+@dataclass
+class FrameEval:
+    frame_index: int
+    tp: int
+    fp: int
+    fn: int
+    gt_car_present: bool
+    pred_car_present: bool
+
+
+def evaluate_video_frames(
+    pred_boxes_by_frame: Mapping[int, Tuple[np.ndarray, np.ndarray]],
+    labels_by_frame: Mapping[int, np.ndarray],
+    max_frame_index: int,
+    iou_threshold: float,
+) -> Tuple[List[FrameEval], Dict[str, Any], Dict[str, Any]]:
+    """
+    pred_boxes_by_frame: frame_idx -> (xyxy Nx4, scores N)
+    """
+    frame_rows: List[FrameEval] = []
+    tp_t = fp_t = fn_t = 0
+    tp_f = fp_f = fn_f = tn_f = 0
+
+    for fi in range(max_frame_index + 1):
+        preds, scores = pred_boxes_by_frame.get(fi, (np.zeros((0, 4)), np.zeros((0,))))
+        gts = boxes_for_frame(labels_by_frame, fi)
+        tp, fp, fn = greedy_match(preds, scores, gts, iou_threshold=iou_threshold)
+        tp_t += tp
+        fp_t += fp
+        fn_t += fn
+
+        gt_present = bool(len(gts) > 0)
+        pred_present = bool(len(preds) > 0)
+
+        if gt_present and pred_present:
+            tp_f += 1
+        elif gt_present and not pred_present:
+            fn_f += 1
+        elif (not gt_present) and pred_present:
+            fp_f += 1
+        else:
+            tn_f += 1
+
+        frame_rows.append(
+            FrameEval(
+                frame_index=fi,
+                tp=tp,
+                fp=fp,
+                fn=fn,
+                gt_car_present=gt_present,
+                pred_car_present=pred_present,
+            )
+        )
+
+    bbox_metrics = {
+        "definition": "Bounding-box TP/FP/FN via greedy IoU matching on car class predictions vs GT boxes.",
+        "iou_threshold": float(iou_threshold),
+        "tp": int(tp_t),
+        "fp": int(fp_t),
+        "fn": int(fn_t),
+        "precision": float(tp_t / (tp_t + fp_t)) if (tp_t + fp_t) > 0 else 0.0,
+        "recall": float(tp_t / (tp_t + fn_t)) if (tp_t + fn_t) > 0 else 0.0,
+    }
+    bbox_metrics["f1"] = (
+        float(2 * bbox_metrics["precision"] * bbox_metrics["recall"] / (bbox_metrics["precision"] + bbox_metrics["recall"]))
+        if (bbox_metrics["precision"] + bbox_metrics["recall"]) > 0
+        else 0.0
+    )
+
+    frame_rates = confusion_and_rates_from_counts(tp_f, fp_f, fn_f, tn_f)
+    frame_rates["definition"] = (
+        "Frame-level confusion for car presence: actual_positive means >=1 GT car box; "
+        "predicted_positive means >=1 predicted car box after confidence filtering."
+    )
+
+    bbox_metrics["micro_accuracy"] = (
+        float(tp_t / (tp_t + fp_t + fn_t)) if (tp_t + fp_t + fn_t) > 0 else 0.0
+    )
+
+    return frame_rows, bbox_metrics, frame_rates
+--- END: detector/evaluation.py ---
+
+--- START: detector/labels.py ---
+"""Ground-truth label JSON loading (per-frame car boxes, xyxy)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, Mapping, MutableMapping
+
+import numpy as np
+
+
+def load_labels_json(path: Path) -> Dict[int, np.ndarray]:
+    """
+    Load per-frame GT boxes (xyxy) from JSON.
+
+    Supported shapes:
+    - {"frames": {"0": [[x1,y1,x2,y2], ...], "1": [], ...}}
+    - {"frames": [{"frame_index": 0, "boxes_xyxy": [...]}, ...]}
+    - {"frames": [[...],[...]]}  # list index == frame index
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    frames: MutableMapping[str, Any] = {}
+    if isinstance(raw.get("frames"), dict):
+        frames = {str(k): v for k, v in raw["frames"].items()}  # type: ignore[assignment]
+    elif isinstance(raw.get("frames"), list):
+        lst = raw["frames"]
+        for i, item in enumerate(lst):
+            if isinstance(item, dict):
+                idx = int(item.get("frame_index", item.get("index", i)))
+                boxes = item.get("boxes_xyxy", item.get("boxes", item.get("xyxy", [])))
+            else:
+                idx = i
+                boxes = item
+            frames[str(idx)] = boxes
+    else:
+        raise ValueError("labels JSON must contain a 'frames' object or list")
+
+    out: Dict[int, np.ndarray] = {}
+    for k, boxes in frames.items():
+        fi = int(k)
+        if boxes is None:
+            arr = np.zeros((0, 4), dtype=np.float32)
+        else:
+            arr = np.asarray(boxes, dtype=np.float32).reshape(-1, 4)
+        out[fi] = arr
+    return out
+
+
+def boxes_for_frame(labels_by_frame: Mapping[int, np.ndarray], frame_index: int) -> np.ndarray:
+    if frame_index in labels_by_frame:
+        return np.asarray(labels_by_frame[frame_index], dtype=np.float32).reshape(-1, 4)
+    return np.zeros((0, 4), dtype=np.float32)
+--- END: detector/labels.py ---
+
+--- START: detector/logging_utils.py ---
+"""Shared logger configuration for the detector process."""
+
+from __future__ import annotations
+
+import logging
+import os
+
+LOGGER = logging.getLogger("car_detector")
+
+
+def configure_logging() -> None:
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+--- END: detector/logging_utils.py ---
+
+--- START: detector/s3_io.py ---
+"""S3 URI parsing and object upload/download helpers."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Mapping, Tuple
+from urllib.parse import urlparse
+
+from detector.logging_utils import LOGGER
+
+
+def parse_s3_uri(uri: str) -> Tuple[str, str]:
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
+        raise ValueError(f"Invalid S3 URI: {uri!r}")
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    if not key:
+        raise ValueError(f"S3 URI must include object key: {uri!r}")
+    return bucket, key
+
+
+def ensure_s3_prefix_uri(uri: str) -> Tuple[str, str]:
+    """Return (bucket, prefix) where prefix ends with '/' if non-empty."""
+    bucket, key = parse_s3_uri(uri)
+    if key and not key.endswith("/"):
+        key = key + "/"
+    return bucket, key
+
+
+def download_s3_object(uri: str, dest_path: Path, s3_client: Any) -> None:
+    bucket, key = parse_s3_uri(uri)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    LOGGER.info("Downloading s3://%s/%s -> %s", bucket, key, dest_path)
+    s3_client.download_file(bucket, key, str(dest_path))
+
+
+def put_s3_json(uri: str, payload: Mapping[str, Any], s3_client: Any) -> None:
+    bucket, key = parse_s3_uri(uri)
+    body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    LOGGER.info("Uploading metrics to s3://%s/%s (%d bytes)", bucket, key, len(body))
+    s3_client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+
+
+def put_s3_text(uri: str, text: str, s3_client: Any, content_type: str = "text/plain") -> None:
+    bucket, key = parse_s3_uri(uri)
+    body = text.encode("utf-8")
+    LOGGER.info("Uploading text artifact to s3://%s/%s (%d bytes)", bucket, key, len(body))
+    s3_client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
+--- END: detector/s3_io.py ---
+
+--- START: scripts/bootstrap.sh ---
+#!/usr/bin/env bash
+# One-shot bootstrap: state-backend (S3 + DynamoDB for TF state) → platform (VPC, ECR, S3, optional EKS) → optional Jenkins.
+#
+# Prerequisites: aws-cli (configured), terraform >= 1.5, jq, openssl
+#
+# Defaults: AWS_REGION=us-east-1, TF_NAME_PREFIX=car-detector
+#
+# Common env vars:
+#   AWS_REGION              Override region (default us-east-1)
+#   TF_NAME_PREFIX          Resource name prefix (default car-detector)
+#   TF_STATE_BUCKET_SUFFIX  Fixed suffix for state bucket (random if unset)
+#   APP_BUCKET_SUFFIX       Suffix for app data bucket (defaults to same as state suffix)
+#   ENABLE_EKS              1 to create EKS (default 0)
+#   BOOTSTRAP_JENKINS       1 to apply terraform/jenkins (default 0)
+#   TRIGGER_JENKINS         1 to run scripts/trigger-jenkins.sh (default 0)
+#   AUTO_APPROVE            1 for non-interactive apply, or pass --yes
+#
+# Jenkins (when TRIGGER_JENKINS=1): JENKINS_URL, JENKINS_JOB, optional JENKINS_USER, JENKINS_TOKEN
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+AUTO_APPROVE_FLAG=()
+if [[ "${AUTO_APPROVE:-}" == "1" ]] || [[ "${1:-}" == "--yes" ]]; then
+  AUTO_APPROVE_FLAG=(-auto-approve)
+fi
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Missing required command: $1" >&2
+    exit 1
+  }
+}
+
+need_cmd terraform
+need_cmd aws
+need_cmd jq
+need_cmd openssl
+
+export AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_DEFAULT_REGION="$AWS_REGION"
+
+echo "==> AWS region: ${AWS_REGION} (set AWS_REGION to override)"
+aws sts get-caller-identity >/dev/null
+
+NAME_PREFIX="${TF_NAME_PREFIX:-car-detector}"
+SUFFIX="${TF_STATE_BUCKET_SUFFIX:-$(openssl rand -hex 4)}"
+APP_SFX="${APP_BUCKET_SUFFIX:-$SUFFIX}"
+ENABLE_EKS="${ENABLE_EKS:-0}"
+BOOTSTRAP_JENKINS="${BOOTSTRAP_JENKINS:-0}"
+TRIGGER_JENKINS="${TRIGGER_JENKINS:-0}"
+
+if [[ "$ENABLE_EKS" == "1" ]]; then
+  EKS_TF_BOOL="true"
+else
+  EKS_TF_BOOL="false"
+fi
+
+write_backend_hcl() {
+  local path="$1"
+  local bucket="$2"
+  local key="$3"
+  local table="$4"
+  local region="$5"
+  cat >"$path" <<EOF
+bucket         = "${bucket}"
+key            = "${key}"
+region         = "${region}"
+dynamodb_table = "${table}"
+encrypt        = true
+EOF
+}
+
+echo "==> [1/3] terraform/state-backend (remote state bucket + lock table; uses local .tfstate in this folder)"
+pushd "$ROOT/terraform/state-backend" >/dev/null
+terraform init -input=false
+terraform apply "${AUTO_APPROVE_FLAG[@]}" -input=false \
+  -var="name_prefix=${NAME_PREFIX}" \
+  -var="bucket_suffix=${SUFFIX}" \
+  -var="aws_region=${AWS_REGION}"
+
+STATE_BUCKET="$(terraform output -raw state_bucket_name)"
+LOCK_TABLE="$(terraform output -raw lock_table_name)"
+popd >/dev/null
+
+echo "==> [2/3] terraform/platform (VPC + ECR + app S3; EKS if ENABLE_EKS=1)"
+write_backend_hcl "$ROOT/terraform/platform/backend.generated.hcl" "$STATE_BUCKET" "platform/terraform.tfstate" "$LOCK_TABLE" "$AWS_REGION"
+
+pushd "$ROOT/terraform/platform" >/dev/null
+terraform init -input=false -reconfigure -backend-config="$ROOT/terraform/platform/backend.generated.hcl"
+terraform apply "${AUTO_APPROVE_FLAG[@]}" -input=false \
+  -var="name_prefix=${NAME_PREFIX}" \
+  -var="aws_region=${AWS_REGION}" \
+  -var="app_bucket_suffix=${APP_SFX}" \
+  -var="enable_eks=${EKS_TF_BOOL}"
+
+VPC_ID="$(terraform output -raw vpc_id)"
+FIRST_SUBNET="$(terraform output -json public_subnet_ids | jq -r '.[0]')"
+popd >/dev/null
+
+if [[ "$BOOTSTRAP_JENKINS" == "1" ]]; then
+  echo "==> [3/3] terraform/jenkins (EC2 controller scaffold)"
+  write_backend_hcl "$ROOT/terraform/jenkins/backend.generated.hcl" "$STATE_BUCKET" "jenkins/terraform.tfstate" "$LOCK_TABLE" "$AWS_REGION"
+  pushd "$ROOT/terraform/jenkins" >/dev/null
+  terraform init -input=false -reconfigure -backend-config="$ROOT/terraform/jenkins/backend.generated.hcl"
+  terraform apply "${AUTO_APPROVE_FLAG[@]}" -input=false \
+    -var="vpc_id=${VPC_ID}" \
+    -var="subnet_id=${FIRST_SUBNET}" \
+    -var="aws_region=${AWS_REGION}" \
+    -var="name_prefix=${NAME_PREFIX}"
+  popd >/dev/null
+else
+  echo "==> Skipping Jenkins (set BOOTSTRAP_JENKINS=1 to apply terraform/jenkins)"
+fi
+
+if [[ "$TRIGGER_JENKINS" == "1" ]]; then
+  echo "==> Triggering Jenkins job"
+  "$ROOT/scripts/trigger-jenkins.sh"
+fi
+
+echo "==> Bootstrap finished."
+echo "    State bucket: ${STATE_BUCKET}"
+echo "    Platform VPC: ${VPC_ID}"
+echo "    First public subnet: ${FIRST_SUBNET}"
+--- END: scripts/bootstrap.sh ---
+
+--- START: scripts/run_local_python.sh ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+export AWS_REGION="${AWS_REGION:-us-east-1}"
+export BUCKET="${BUCKET:-car-detector-demo-nerya-1778770380}"
+
+export S3_VIDEO_URI="${S3_VIDEO_URI:-s3://$BUCKET/input/car-sample.mp4}"
+export S3_LABELS_URI="${S3_LABELS_URI:-s3://$BUCKET/input/labels.json}"
+export S3_OUTPUT_PREFIX_URI="${S3_OUTPUT_PREFIX_URI:-s3://$BUCKET/runs/local-python-$(date +%Y%m%d-%H%M%S)/}"
+
+export YOLO_MODEL="${YOLO_MODEL:-yolov8n.pt}"
+export YOLO_DEVICE="${YOLO_DEVICE:-cpu}"
+export CONF_THRESHOLD="${CONF_THRESHOLD:-0.25}"
+export IOU_THRESHOLD="${IOU_THRESHOLD:-0.5}"
+export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+
+echo "Running car detector..."
+echo "Video:  $S3_VIDEO_URI"
+echo "Labels: $S3_LABELS_URI"
+echo "Output: $S3_OUTPUT_PREFIX_URI"
+
+python -m detector.app
+--- END: scripts/run_local_python.sh ---
+
+--- START: scripts/trigger-jenkins.sh ---
+#!/usr/bin/env bash
+# Trigger a Jenkins job over HTTP (works with classic crumb + API token).
+#
+# Required: JENKINS_URL (e.g. https://jenkins.example.com), JENKINS_JOB (folder/job name URL-encoded if needed)
+# Optional: JENKINS_USER, JENKINS_TOKEN (or JENKINS_API_TOKEN). If anonymous build is allowed, leave user/token unset.
+
+set -euo pipefail
+
+: "${JENKINS_URL:?Set JENKINS_URL (e.g. https://jenkins.example.com)}"
+: "${JENKINS_JOB:?Set JENKINS_JOB (job path, e.g. car-detector or folder/job)}"
+
+BASE="${JENKINS_URL%/}"
+JOB_PATH=""
+IFS='/' read -r -a PARTS <<< "${JENKINS_JOB}"
+for p in "${PARTS[@]}"; do
+  [[ -z "$p" ]] && continue
+  JOB_PATH+="/job/${p}"
+done
+JOB_URL="${BASE}${JOB_PATH}/build"
+
+USER="${JENKINS_USER:-}"
+TOKEN="${JENKINS_TOKEN:-${JENKINS_API_TOKEN:-}}"
+AUTH=()
+if [[ -n "$USER" || -n "$TOKEN" ]]; then
+  AUTH=(-u "${USER}:${TOKEN}")
+fi
+
+CRUMB_JSON="$(curl -fsS "${AUTH[@]}" "${BASE}/crumbIssuer/api/json" 2>/dev/null || true)"
+CRUMB="$(echo "$CRUMB_JSON" | jq -r '.crumb // empty' 2>/dev/null || true)"
+CRUMB_FIELD="$(echo "$CRUMB_JSON" | jq -r '.crumbRequestField // empty' 2>/dev/null || true)"
+
+HDR=()
+if [[ -n "$CRUMB" && -n "$CRUMB_FIELD" ]]; then
+  HDR=(-H "${CRUMB_FIELD}: ${CRUMB}")
+fi
+
+echo "POST ${JOB_URL}"
+curl -fsS -X POST "${AUTH[@]}" "${HDR[@]}" "$JOB_URL" -o /dev/null
+echo "Build trigger sent."
+--- END: scripts/trigger-jenkins.sh ---
+
+--- START: docs/README.md ---
+# Project background
+
+Read these in order when onboarding or handing work between agents.
+
+| Doc | Purpose |
+|-----|---------|
+| [dataset-and-s3.md](dataset-and-s3.md) | Where the labeled video and GT labels live (S3, not git) and which env vars point at them |
+| [repo-layout.md](repo-layout.md) | Directory map: Python package, tests, Docker, Helm, Terraform |
+| [terraform-layout.md](terraform-layout.md) | Three Terraform stacks and shared `modules/` |
+| [workstreams.md](workstreams.md) | Suggested order: app → container → CI → cluster → Jenkins |
+| [aws-region-and-bootstrap.md](aws-region-and-bootstrap.md) | Default `us-east-1`, region overrides, `scripts/bootstrap.sh`, Jenkins trigger |
+| [submission-and-aws-accounts.md](submission-and-aws-accounts.md) | Who supplies the AWS test account (candidate vs employer) |
+--- END: docs/README.md ---
+
+--- START: docs/aws-region-and-bootstrap.md ---
+# AWS region and one-shot bootstrap
+
+## Default region
+
+- **Default:** `us-east-1` for Terraform variables, `docker-compose.yml`, and `config/.env.example`.
+- **Override:** export `AWS_REGION` (and usually `AWS_DEFAULT_REGION`) before running Terraform, Docker, or `scripts/bootstrap.sh`.
+
+## One-shot infrastructure (`scripts/bootstrap.sh`)
+
+From repo root (after `chmod +x scripts/bootstrap.sh scripts/trigger-jenkins.sh`):
+
+```bash
+# Interactive applies (you type "yes" when prompted)
+./scripts/bootstrap.sh
+
+# Non-interactive (CI / automation)
+AUTO_APPROVE=1 ./scripts/bootstrap.sh --yes
+```
+
+Optional:
+
+```bash
+AWS_REGION=us-west-2 AUTO_APPROVE=1 ./scripts/bootstrap.sh --yes
+ENABLE_EKS=1 BOOTSTRAP_JENKINS=1 TRIGGER_JENKINS=1 \
+  JENKINS_URL=https://jenkins.example.com JENKINS_JOB=car-detector \
+  JENKINS_USER=you JENKINS_TOKEN=your-api-token \
+  AUTO_APPROVE=1 ./scripts/bootstrap.sh --yes
+```
+
+`terraform/**/backend.generated.hcl` is written by the script and is **gitignored** (contains your state bucket name).
+
+## Jenkins only
+
+```bash
+./scripts/trigger-jenkins.sh
+```
+
+Requires `JENKINS_URL` and `JENKINS_JOB` (use path segments, e.g. `folderA/myJob`).
+
+## Local Terraform without remote state
+
+To experiment without the S3 backend:
+
+```bash
+cd terraform/platform && terraform init -backend=false
+```
+
+Same idea for `terraform/jenkins` if you add a `backend "s3" {}` block there (already present): use `terraform init -backend=false` for purely local state.
+--- END: docs/aws-region-and-bootstrap.md ---
+
+--- START: docs/dataset-and-s3.md ---
+# Dataset and S3
+
+## Where are the video and labels?
+
+They are **not stored in this repository**. The practical test assumes a **small labeled video** and **ground-truth labels** are already placed in **S3 inside your AWS test account** (or whatever bucket URIs Neuronics / your instructor gave you).
+
+You reference them at run time with:
+
+- **`S3_VIDEO_URI`** — `s3://bucket/key.mp4` (or similar)
+- **`S3_LABELS_URI`** — `s3://bucket/key.json` (per-frame car boxes; formats supported by `detector.labels.load_labels_json`)
+
+Outputs go to either:
+
+- **`S3_OUTPUT_PREFIX_URI`** — `s3://bucket/prefix/` (service writes `metrics.json` and `run.log` under that prefix), or  
+- **`S3_METRICS_URI`** / **`S3_RUN_LOG_URI`** — explicit object keys.
+
+## How to find the real URIs
+
+1. Check email / brief / shared doc from the company running the test.  
+2. In the AWS console: **S3** → open the test bucket → copy object URLs and convert to `s3://bucket/key` form.  
+3. Keep secrets out of git: use **`.env`** (gitignored), **IAM roles** on EKS, or Jenkins credentials — see `config/.env.example`.
+
+## Local vs cloud credentials
+
+- **Locally:** short-lived keys or SSO profile (only on your machine).  
+- **EKS:** prefer **IRSA** (IAM Roles for Service Accounts) so the pod does not use long-lived keys.
+--- END: docs/dataset-and-s3.md ---
+
+--- START: docs/repo-layout.md ---
+# Repository layout
+
+```text
+devops-test-car-detection/
+├── config/                 # Example env only (.env.example); real .env stays gitignored
+├── detector/               # Python application
+│   ├── app.py              # Thin entry for `python -m detector.app`
+│   ├── cli.py              # Argparse + full S3 → YOLO → metrics → S3 run
+│   ├── constants.py        # COCO car class id, etc.
+│   ├── evaluation.py       # IoU, matching, confusion matrix / rates
+│   ├── labels.py           # GT JSON → per-frame boxes
+│   ├── logging_utils.py    # Shared logger setup
+│   └── s3_io.py            # S3 URI helpers + get/put objects
+├── docs/                   # Onboarding and architecture notes (this folder)
+├── helm/car-detector/      # Kubernetes packaging (fill templates + values)
+├── tests/                  # pytest: pure logic (no S3 / no GPU required)
+├── terraform/              # IaC split into 3 stacks + modules (see terraform-layout.md)
+├── Dockerfile
+├── docker-compose.yml
+├── Jenkinsfile             # CI/CD (to be implemented)
+├── pyproject.toml          # pytest / ruff settings
+├── requirements.txt
+└── README.md               # Top-level quick links
+```
+
+**Docker** expects `PYTHONPATH=/app` and `CMD ["python", "-m", "detector.app"]` (see `Dockerfile`).
+--- END: docs/repo-layout.md ---
+
+--- START: docs/submission-and-aws-accounts.md ---
+# Submission: whose AWS account?
+
+## What the Neuronics-style brief usually means
+
+Many hiring tests say they provide an **AWS test account** (EKS, ECR, S3, Jenkins) **to you**, the candidate. In that model, **you** apply Terraform and run pipelines **inside their** account using credentials **they** issued. You normally **do not** give them *your* root keys.
+
+## Can you supply *your own* test account to them?
+
+- **As the official submission surface:** only if the employer explicitly allows it (e.g. “record a demo in your own sandbox”). Otherwise, assume they want artifacts from **their** environment or a **shared** account they control.
+- **As a portfolio / open-source fork:** using **your** account is normal. Forkers run `scripts/bootstrap.sh` with **their** `aws configure` profile; you are not handing out your keys—you publish **code + docs** only.
+
+## Practical guidance
+
+1. **Read their email / portal:** do they send IAM user, SSO, or “use this account ID”?  
+2. **If they give you an account:** use it for submission; do not commit credentials; use `AUTO_APPROVE` only in disposable sandboxes.  
+3. **If they do not give you an account:** ask whether a **screen recording + logs + fork URL** is acceptable, or whether they will provision access.  
+4. **Never** commit access keys or long-lived tokens; use IAM roles (EKS IRSA, instance profiles) where possible.
+
+This repo stays **account-agnostic**: only `AWS_REGION` and standard AWS credential env vars / profiles matter.
+--- END: docs/submission-and-aws-accounts.md ---
+
+--- START: docs/terraform-layout.md ---
+# Terraform layout
+
+Infrastructure is split into **three stacks** under `terraform/`. Apply order: **1 → 2 → (optional 3)**. **Default AWS region** for variables is **`us-east-1`**; set `AWS_REGION` / `-var=aws_region=...` to change it.
+
+For a generic one-shot flow (AWS CLI + Terraform + jq), use **`scripts/bootstrap.sh`** (see `docs/aws-region-and-bootstrap.md`).
+
+## 1. `terraform/state-backend/`
+
+Creates the **remote state** backend: S3 bucket + DynamoDB table for state locking.
+
+- Uses **local** Terraform state (this stack is the bootstrap; do not store its state only in the bucket it creates without a one-time bootstrap flow).
+- After apply, copy `outputs` into `platform/backend.tf` (or use the generated `backend.tf.example` pattern).
+
+## 2. `terraform/platform/`
+
+Shared **platform**: **VPC**, **EKS** (optional toggle), **ECR**, **S3 buckets** for app datasets / run outputs.
+
+- Composes **reusable modules** under `terraform/modules/`.
+- Intended for **EC2-backed EKS** and supporting services per the test brief.
+
+## 3. `terraform/jenkins/`
+
+A **Jenkins controller** (EC2 pattern in scaffold — adjust AMI, sizing, and plugins to match your org).
+
+- Takes **VPC + subnet** inputs (from `platform` outputs or variables).
+
+## Modules (`terraform/modules/`)
+
+| Module | Role |
+|--------|------|
+| `remote_state_backend` | S3 + DynamoDB for Terraform state |
+| `network` | VPC, public subnets, IGW (dev/test style) |
+| `ecr` | Container registry for the detector image |
+| `s3_app_data` | Buckets/prefixes for video, labels, metrics (tighten policies per environment) |
+| `eks` | EKS cluster + managed node group (uses public subnets in scaffold — **harden for production**) |
+
+## Commands (after filling variables)
+
+```bash
+cd terraform/state-backend && terraform init && terraform plan
+cd ../platform && terraform init && terraform plan
+cd ../jenkins && terraform init && terraform plan
+```
+
+Add `-var-file=...` or `TF_VAR_*` as you standardize per environment.
+--- END: docs/terraform-layout.md ---
+
+--- START: docs/workstreams.md ---
+# Workstreams (recommended order)
+
+1. **Application** — Confirm `detector/` behavior and `tests/` pass (`pytest`).  
+2. **Container** — `docker compose build` / `run` with env from `config/.env.example`.  
+3. **Registry** — ECR repo (Terraform `platform` or manual) and push image.  
+4. **CI** — Implement `Jenkinsfile`: compose build, push, run job against S3 URIs, parse metrics, gate on thresholds.  
+5. **Cluster** — EKS from `terraform/platform`, IRSA for S3, deploy via `helm/car-detector`.  
+6. **Jenkins host** — `terraform/jenkins` or managed Jenkins; document trigger steps in `README.md`.
+
+Cross-cutting: **no long-lived keys in git**; document real S3 URIs only in private runbooks or Jenkins credentials.
+--- END: docs/workstreams.md ---
+
+--- START: data/labels/labels_auto.json ---
+{
+  "frames": {
+    "0": [
+      [
+        637,
+        428,
+        727,
+        494
+      ]
+    ],
+    "1": [
+      [
+        638,
+        425,
+        727,
+        495
+      ]
+    ],
+    "2": [
+      [
+        636,
+        420,
+        726,
+        493
+      ]
+    ],
+    "3": [
+      [
+        634,
+        416,
+        726,
+        492
+      ]
+    ],
+    "4": [
+      [
+        632,
+        409,
+        727,
+        487
+      ]
+    ],
+    "5": [
+      [
+        631,
+        403,
+        726,
+        485
+      ]
+    ],
+    "6": [
+      [
+        629,
+        399,
+        728,
+        483
+      ]
+    ],
+    "7": [
+      [
+        627,
+        395,
+        729,
+        482
+      ]
+    ],
+    "8": [
+      [
+        624,
+        387,
+        729,
+        480
+      ]
+    ],
+    "9": [
+      [
+        623,
+        384,
+        730,
+        480
+      ]
+    ],
+    "10": [
+      [
+        619,
+        379,
+        732,
+        481
+      ]
+    ],
+    "11": [
+      [
+        616,
+        373,
+        734,
+        481
+      ]
+    ],
+    "12": [
+      [
+        613,
+        368,
+        735,
+        480
+      ]
+    ],
+    "13": [
+      [
+        610,
+        364,
+        737,
+        481
+      ]
+    ],
+    "14": [
+      [
+        609,
+        357,
+        738,
+        480
+      ]
+    ],
+    "15": [
+      [
+        607,
+        353,
+        741,
+        480
+      ]
+    ],
+    "16": [
+      [
+        603,
+        346,
+        743,
+        481
+      ]
+    ],
+    "17": [
+      [
+        601,
+        337,
+        746,
+        481
+      ]
+    ],
+    "18": [
+      [
+        597,
+        332,
+        749,
+        480
+      ]
+    ],
+    "19": [
+      [
+        594,
+        323,
+        753,
+        481
+      ]
+    ],
+    "20": [
+      [
+        590,
+        315,
+        755,
+        482
+      ]
+    ],
+    "21": [
+      [
+        587,
+        303,
+        760,
+        484
+      ]
+    ],
+    "22": [
+      [
+        582,
+        291,
+        761,
+        484
+      ]
+    ],
+    "23": [
+      [
+        577,
+        283,
+        766,
+        485
+      ]
+    ],
+    "24": [
+      [
+        570,
+        271,
+        770,
+        486
+      ]
+    ],
+    "25": [
+      [
+        566,
+        261,
+        775,
+        489
+      ]
+    ],
+    "26": [
+      [
+        560,
+        253,
+        778,
+        491
+      ]
+    ],
+    "27": [
+      [
+        548,
+        237,
+        786,
+        498
+      ]
+    ],
+    "28": [
+      [
+        533,
+        217,
+        799,
+        508
+      ]
+    ],
+    "29": [
+      [
+        526,
+        208,
+        805,
+        517
+      ]
+    ],
+    "30": [
+      [
+        520,
+        198,
+        812,
+        523
+      ]
+    ],
+    "31": [
+      [
+        507,
+        186,
+        825,
+        530
+      ]
+    ],
+    "32": [
+      [
+        498,
+        172,
+        835,
+        539
+      ]
+    ],
+    "33": [
+      [
+        488,
+        163,
+        848,
+        547
+      ]
+    ],
+    "34": [
+      [
+        469,
+        145,
+        867,
+        566
+      ]
+    ],
+    "35": [
+      [
+        457,
+        128,
+        880,
+        573
+      ]
+    ],
+    "36": [
+      [
+        445,
+        119,
+        898,
+        587
+      ]
+    ],
+    "37": [
+      [
+        435,
+        111,
+        911,
+        598
+      ]
+    ],
+    "38": [
+      [
+        395,
+        82,
+        954,
+        622
+      ]
+    ],
+    "39": [
+      [
+        382,
+        72,
+        969,
+        632
+      ]
+    ],
+    "40": [
+      [
+        367,
+        61,
+        986,
+        639
+      ]
+    ],
+    "41": [
+      [
+        309,
+        56,
+        1010,
+        683
+      ]
+    ],
+    "42": [
+      [
+        326,
+        49,
+        1032,
+        668
+      ]
+    ],
+    "43": [
+      [
+        254,
+        42,
+        1055,
+        688
+      ]
+    ],
+    "44": [
+      [
+        297,
+        37,
+        1078,
+        673
+      ]
+    ],
+    "45": [
+      [
+        292,
+        32,
+        1101,
+        679
+      ]
+    ],
+    "46": [
+      [
+        273,
+        31,
+        1121,
+        679
+      ]
+    ],
+    "47": [
+      [
+        268,
+        31,
+        1139,
+        680
+      ]
+    ],
+    "48": [
+      [
+        250,
+        34,
+        1167,
+        677
+      ]
+    ],
+    "49": [
+      [
+        240,
+        38,
+        1192,
+        676
+      ]
+    ],
+    "50": [
+      [
+        221,
+        43,
+        1209,
+        673
+      ]
+    ],
+    "51": [
+      [
+        214,
+        42,
+        1226,
+        671
+      ]
+    ],
+    "52": [
+      [
+        204,
+        47,
+        1259,
+        668
+      ]
+    ],
+    "53": [
+      [
+        197,
+        53,
+        1259,
+        667
+      ]
+    ],
+    "54": [
+      [
+        194,
+        50,
+        1270,
+        666
+      ]
+    ],
+    "55": [
+      [
+        167,
+        54,
+        1276,
+        659
+      ]
+    ],
+    "56": [
+      [
+        166,
+        59,
+        1280,
+        659
+      ]
+    ],
+    "57": [
+      [
+        147,
+        64,
+        1280,
+        656
+      ]
+    ],
+    "58": [
+      [
+        140,
+        69,
+        1280,
+        655
+      ]
+    ],
+    "59": [
+      [
+        140,
+        78,
+        1280,
+        646
+      ]
+    ],
+    "60": [
+      [
+        136,
+        80,
+        1279,
+        644
+      ]
+    ],
+    "61": [
+      [
+        132,
+        87,
+        1280,
+        637
+      ]
+    ],
+    "62": [
+      [
+        126,
+        88,
+        1279,
+        640
+      ]
+    ],
+    "63": [
+      [
+        462,
+        213,
+        844,
+        438
+      ]
+    ],
+    "64": [
+      [
+        457,
+        209,
+        851,
+        439
+      ]
+    ],
+    "65": [
+      [
+        450,
+        205,
+        854,
+        439
+      ]
+    ],
+    "66": [
+      [
+        443,
+        201,
+        859,
+        439
+      ]
+    ],
+    "67": [
+      [
+        438,
+        195,
+        864,
+        440
+      ]
+    ],
+    "68": [
+      [
+        430,
+        189,
+        869,
+        439
+      ]
+    ],
+    "69": [
+      [
+        425,
+        183,
+        881,
+        441
+      ]
+    ],
+    "70": [
+      [
+        416,
+        177,
+        889,
+        443
+      ]
+    ],
+    "71": [
+      [
+        397,
+        168,
+        896,
+        445
+      ]
+    ],
+    "72": [
+      [
+        389,
+        160,
+        905,
+        447
+      ]
+    ],
+    "73": [
+      [
+        380,
+        152,
+        921,
+        450
+      ]
+    ],
+    "74": [
+      [
+        371,
+        144,
+        930,
+        452
+      ]
+    ],
+    "75": [
+      [
+        354,
+        133,
+        949,
+        453
+      ]
+    ],
+    "76": [
+      [
+        339,
+        122,
+        963,
+        454
+      ]
+    ],
+    "77": [
+      [
+        321,
+        114,
+        983,
+        458
+      ]
+    ],
+    "78": [
+      [
+        282,
+        78,
+        1062,
+        464
+      ]
+    ],
+    "79": [
+      [
+        266,
+        64,
+        1093,
+        470
+      ]
+    ],
+    "80": [
+      [
+        244,
+        49,
+        1125,
+        475
+      ]
+    ],
+    "81": [
+      [
+        218,
+        12,
+        1181,
+        481
+      ]
+    ],
+    "82": [
+      [
+        187,
+        2,
+        1240,
+        486
+      ]
+    ],
+    "83": [
+      [
+        147,
+        2,
+        1280,
+        495
+      ]
+    ],
+    "84": [
+      [
+        112,
+        2,
+        1278,
+        512
+      ]
+    ],
+    "85": [
+      [
+        42,
+        4,
+        1278,
+        528
+      ]
+    ],
+    "86": [
+      [
+        6,
+        3,
+        1256,
+        549
+      ]
+    ],
+    "87": [
+      [
+        6,
+        2,
+        1279,
+        576
+      ]
+    ],
+    "88": [
+      [
+        4,
+        3,
+        1280,
+        615
+      ]
+    ],
+    "89": [],
+    "90": [],
+    "91": [],
+    "92": [],
+    "93": [],
+    "94": [],
+    "95": [
+      [
+        16,
+        3,
+        1278,
+        574
+      ]
+    ],
+    "96": [
+      [
+        316,
+        2,
+        1274,
+        528
+      ]
+    ],
+    "97": [
+      [
+        1,
+        2,
+        1273,
+        504
+      ]
+    ],
+    "98": [
+      [
+        1,
+        2,
+        1159,
+        476
+      ]
+    ],
+    "99": [
+      [
+        5,
+        3,
+        1025,
+        455
+      ]
+    ],
+    "100": [
+      [
+        3,
+        2,
+        942,
+        445
+      ]
+    ],
+    "101": [
+      [
+        5,
+        4,
+        871,
+        430
+      ]
+    ],
+    "102": [
+      [
+        38,
+        39,
+        833,
+        425
+      ]
+    ],
+    "103": [
+      [
+        149,
+        91,
+        787,
+        414
+      ]
+    ],
+    "104": [
+      [
+        213,
+        119,
+        769,
+        413
+      ]
+    ],
+    "105": [
+      [
+        271,
+        153,
+        761,
+        410
+      ]
+    ],
+    "106": [
+      [
+        312,
+        163,
+        753,
+        408
+      ]
+    ],
+    "107": [
+      [
+        357,
+        182,
+        747,
+        407
+      ]
+    ],
+    "108": [
+      [
+        392,
+        200,
+        745,
+        407
+      ]
+    ],
+    "109": [
+      [
+        432,
+        218,
+        744,
+        407
+      ]
+    ],
+    "110": [
+      [
+        453,
+        229,
+        745,
+        407
+      ]
+    ],
+    "111": [
+      [
+        475,
+        236,
+        744,
+        409
+      ]
+    ],
+    "112": [
+      [
+        497,
+        248,
+        745,
+        409
+      ]
+    ],
+    "113": [
+      [
+        516,
+        263,
+        741,
+        408
+      ]
+    ],
+    "114": [
+      [
+        527,
+        270,
+        741,
+        409
+      ]
+    ],
+    "115": [
+      [
+        545,
+        286,
+        736,
+        412
+      ]
+    ],
+    "116": [
+      [
+        556,
+        293,
+        738,
+        413
+      ]
+    ],
+    "117": [
+      [
+        568,
+        298,
+        737,
+        414
+      ]
+    ],
+    "118": [
+      [
+        577,
+        303,
+        738,
+        415
+      ]
+    ],
+    "119": [
+      [
+        593,
+        316,
+        738,
+        416
+      ]
+    ],
+    "120": [
+      [
+        601,
+        321,
+        738,
+        417
+      ]
+    ]
+  }
+}
+--- END: data/labels/labels_auto.json ---
+
+--- START: data/labels/labels_full.json ---
+{
+  "frames": {
+    "0": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "1": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "2": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "3": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "4": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "5": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "6": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "7": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "8": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "9": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "10": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "11": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "12": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "13": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "14": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "15": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "16": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "17": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "18": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "19": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "20": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "21": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "22": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "23": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "24": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "25": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "26": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "27": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "28": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "29": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "30": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "31": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "32": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "33": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "34": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "35": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "36": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "37": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "38": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "39": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "40": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "41": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "42": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "43": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "44": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "45": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "46": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "47": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "48": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "49": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "50": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "51": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "52": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "53": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "54": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "55": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "56": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "57": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "58": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "59": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "60": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "61": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "62": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "63": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "64": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "65": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "66": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "67": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "68": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "69": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "70": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "71": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "72": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "73": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "74": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "75": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "76": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "77": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "78": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "79": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "80": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "81": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "82": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "83": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "84": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "85": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "86": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "87": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "88": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "89": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "90": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "91": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "92": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "93": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "94": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "95": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "96": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "97": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "98": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "99": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "100": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "101": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "102": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "103": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "104": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "105": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "106": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "107": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "108": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "109": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "110": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "111": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "112": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "113": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "114": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "115": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "116": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "117": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "118": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "119": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ],
+    "120": [
+      [
+        220,
+        160,
+        1120,
+        680
+      ]
+    ]
+  }
+}
+--- END: data/labels/labels_full.json ---

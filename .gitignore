@@ -21,3 +21,11 @@ crash.log
 override.tf
 override.tf.json
 terraform/**/backend.generated.hcl
+data/input/
+data/frames/
+data/artifacts/
+tmp/
+
+yolov8*.pt
+*.mp4
+*.pyc
