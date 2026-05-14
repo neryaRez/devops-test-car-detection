@@ -1,0 +1,21 @@
+services:
+  detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${CAR_DETECTOR_IMAGE:-car-detector:local}
+    environment:
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_VIDEO_URI: ${S3_VIDEO_URI:-}
+      S3_LABELS_URI: ${S3_LABELS_URI:-}
+      S3_OUTPUT_PREFIX_URI: ${S3_OUTPUT_PREFIX_URI:-}
+      S3_METRICS_URI: ${S3_METRICS_URI:-}
+      S3_RUN_LOG_URI: ${S3_RUN_LOG_URI:-}
+      YOLO_MODEL: ${YOLO_MODEL:-yolov8n.pt}
+      YOLO_DEVICE: ${YOLO_DEVICE:-}
+      CONF_THRESHOLD: ${CONF_THRESHOLD:-0.25}
+      IOU_THRESHOLD: ${IOU_THRESHOLD:-0.5}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
