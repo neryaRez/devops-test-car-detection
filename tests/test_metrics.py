@@ -3,13 +3,13 @@ from pathlib import Path
 
 import numpy as np
 
-from detector.app import (
+from detector.evaluation import (
+    confusion_and_rates_from_counts,
     evaluate_video_frames,
     greedy_match,
     iou_xyxy,
-    load_labels_json,
-    confusion_and_rates_from_counts,
 )
+from detector.labels import load_labels_json
 
 
 def test_iou_xyxy_perfect_overlap():

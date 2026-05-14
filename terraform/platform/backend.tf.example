@@ -1,0 +1,11 @@
+# Copy to backend.tf after state-backend stack is applied. Do not commit backend.tf if it embeds secrets (it should not).
+
+terraform {
+  backend "s3" {
+    bucket         = "REPLACE_WITH_STATE_BUCKET"
+    key            = "platform/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "REPLACE_WITH_LOCK_TABLE"
+    encrypt        = true
+  }
+}
