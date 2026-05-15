@@ -25,5 +25,4 @@ data/artifacts/
 tmp/
 
 yolov8*.pt
-*.mp4
 *.pyc
