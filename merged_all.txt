@@ -397,7 +397,7 @@ variable "bucket_suffix" {
 variable "environment" {
   type = string
   description = "Environment name used for tagging."
-  default = "prod"
+  default = "test"
 }
 --- END: terraform/modules/s3_app_data/variables.tf ---
 
@@ -855,7 +855,7 @@ variable "cluster_version" {
 variable "environment" {
   type = string
   description = "Environment name used for tagging."
-  default = "prod"
+  default = "test"
 }
 --- END: terraform/modules/eks/variables.tf ---
 
@@ -873,7 +873,7 @@ resource "aws_ecr_repository" "car_detector" {
   }
 
   tags = {
-    Name = "${var.name_prefix}-car-detector"
+    Name = var.name_prefix
     Environment = var.environment
   }
 }
@@ -896,7 +896,7 @@ variable "name_prefix" {
 variable "environment" {
   type = string
   description = "Environment name used for tagging."
-  default = "prod"
+  default = "test"
 }
 --- END: terraform/modules/ecr/variables.tf ---
 
@@ -957,12 +957,14 @@ module "network" {
 module "ecr" {
   source      = "../modules/ecr"
   name_prefix = var.name_prefix
+  environment = var.environment
 }
 
 module "s3_app_data" {
   source        = "../modules/s3_app_data"
   name_prefix   = var.name_prefix
   bucket_suffix = local.app_bucket_suffix
+  environment = var.environment
 }
 
 module "eks" {
@@ -973,6 +975,7 @@ module "eks" {
   vpc_id          = module.network.vpc_id
   subnet_ids      = module.network.private_subnet_ids
   cluster_version = var.eks_cluster_version
+  environment     = var.environment
 }
 --- END: terraform/platform/main.tf ---
 
@@ -1883,6 +1886,64 @@ echo "    State bucket: ${STATE_BUCKET}"
 echo "    Platform VPC: ${VPC_ID}"
 echo "    First public subnet: ${FIRST_SUBNET}"
 --- END: scripts/bootstrap.sh ---
+
+--- START: scripts/init_platform_backend.sh ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PROJECT_NAME="${PROJECT_NAME:-car-detector}"
+ENVIRONMENT="${ENVIRONMENT:-test}"
+AWS_REGION="${AWS_REGION:-$(aws configure get region || true)}"
+
+if [[ -z "$AWS_REGION" ]]; then
+  AWS_REGION="us-east-1"
+fi
+
+export AWS_REGION
+export AWS_DEFAULT_REGION="$AWS_REGION"
+
+aws sts get-caller-identity >/dev/null
+
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+
+STATE_BUCKET="${PROJECT_NAME}-tfstate-${ACCOUNT_ID}-${AWS_REGION}"
+LOCK_TABLE="${PROJECT_NAME}-tf-locks"
+STATE_KEY="platform/${ENVIRONMENT}/terraform.tfstate"
+
+echo "Initializing platform backend:"
+echo "  Project:      ${PROJECT_NAME}"
+echo "  Environment:  ${ENVIRONMENT}"
+echo "  Account:      ${ACCOUNT_ID}"
+echo "  Region:       ${AWS_REGION}"
+echo "  Bucket:       ${STATE_BUCKET}"
+echo "  Lock table:   ${LOCK_TABLE}"
+echo "  State key:    ${STATE_KEY}"
+
+BACKEND_DIR="$ROOT/terraform/.generated-backends"
+BACKEND_FILE="$BACKEND_DIR/platform.hcl"
+
+mkdir -p "$BACKEND_DIR"
+
+cat > "$BACKEND_FILE" <<EOF
+bucket         = "${STATE_BUCKET}"
+key            = "${STATE_KEY}"
+region         = "${AWS_REGION}"
+dynamodb_table = "${LOCK_TABLE}"
+encrypt        = true
+EOF
+
+cd "$ROOT/terraform/platform"
+
+terraform init \
+  -reconfigure \
+  -input=false \
+  -backend-config="$BACKEND_FILE"
+
+echo "Platform backend initialized successfully."
+--- END: scripts/init_platform_backend.sh ---
 
 --- START: scripts/run.sh ---
 #!/usr/bin/env bash

@@ -40,12 +40,14 @@ module "network" {
 module "ecr" {
   source      = "../modules/ecr"
   name_prefix = var.name_prefix
+  environment = var.environment
 }
 
 module "s3_app_data" {
   source        = "../modules/s3_app_data"
   name_prefix   = var.name_prefix
   bucket_suffix = local.app_bucket_suffix
+  environment   = var.environment
 }
 
 module "eks" {
@@ -53,7 +55,18 @@ module "eks" {
   source = "../modules/eks"
 
   name_prefix     = var.name_prefix
+  environment     = var.environment
   vpc_id          = module.network.vpc_id
   subnet_ids      = module.network.private_subnet_ids
   cluster_version = var.eks_cluster_version
+
+  cluster_endpoint_public_access       = var.eks_endpoint_public_access
+  cluster_endpoint_public_access_cidrs = var.eks_endpoint_public_access_cidrs
+
+  node_instance_types = var.eks_node_instance_types
+  node_min_size       = var.eks_node_min_size
+  node_max_size       = var.eks_node_max_size
+  node_desired_size   = var.eks_node_desired_size
+  node_capacity_type  = var.eks_node_capacity_type
+  node_disk_size      = var.eks_node_disk_size
 }

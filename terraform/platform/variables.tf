@@ -69,3 +69,51 @@ variable "detector_service_account_name" {
   description = "Kubernetes ServiceAccount name used by the detector pod."
   default     = "car-detector"
 }
+
+variable "eks_endpoint_public_access" {
+  type        = bool
+  description = "Whether to expose the EKS API endpoint publicly. Default false; Jenkins/SSM should manage the cluster from inside the VPC."
+  default     = false
+}
+
+variable "eks_endpoint_public_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to reach the public EKS API endpoint if enabled."
+  default     = []
+}
+
+variable "eks_node_instance_types" {
+  type        = list(string)
+  description = "EC2 instance types for the EKS managed node group."
+  default     = ["t3.medium"]
+}
+
+variable "eks_node_min_size" {
+  type        = number
+  description = "Minimum number of EKS worker nodes."
+  default     = 1
+}
+
+variable "eks_node_max_size" {
+  type        = number
+  description = "Maximum number of EKS worker nodes."
+  default     = 3
+}
+
+variable "eks_node_desired_size" {
+  type        = number
+  description = "Desired number of EKS worker nodes."
+  default     = 1
+}
+
+variable "eks_node_capacity_type" {
+  type        = string
+  description = "EKS node capacity type: ON_DEMAND or SPOT."
+  default     = "ON_DEMAND"
+}
+
+variable "eks_node_disk_size" {
+  type        = number
+  description = "Disk size in GiB for EKS worker nodes."
+  default     = 30
+}
