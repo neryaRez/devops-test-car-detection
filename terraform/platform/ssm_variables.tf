@@ -39,3 +39,17 @@ resource "aws_ssm_parameter" "detector_service_account_name" {
   type  = "String"
   value = var.detector_service_account_name
 }
+
+resource "aws_ssm_parameter" "vpc_id" {
+  name      = "${local.ssm_prefix}/vpc-id"
+  type      = "String"
+  value     = module.network.vpc_id
+  overwrite = true
+}
+
+resource "aws_ssm_parameter" "private_subnet_ids" {
+  name      = "${local.ssm_prefix}/private-subnet-ids"
+  type      = "StringList"
+  value     = join(",", module.network.private_subnet_ids)
+  overwrite = true
+}

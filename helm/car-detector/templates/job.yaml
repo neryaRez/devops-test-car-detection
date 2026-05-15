@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "car-detector.fullname" . }}-{{ .Release.Revision }}
+  labels:
+    {{- include "car-detector.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "car-detector.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "car-detector.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: car-detector
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: S3_VIDEO_URI
+              value: {{ required "s3.videoUri is required" .Values.s3.videoUri | quote }}
+            - name: S3_LABELS_URI
+              value: {{ required "s3.labelsUri is required" .Values.s3.labelsUri | quote }}
+            - name: S3_OUTPUT_PREFIX_URI
+              value: {{ required "s3.outputPrefixUri is required" .Values.s3.outputPrefixUri | quote }}
+            - name: YOLO_MODEL
+              value: {{ .Values.detector.yoloModel | quote }}
+            - name: YOLO_DEVICE
+              value: {{ .Values.detector.yoloDevice | quote }}
+            - name: CONF_THRESHOLD
+              value: {{ .Values.detector.confThreshold | quote }}
+            - name: IOU_THRESHOLD
+              value: {{ .Values.detector.iouThreshold | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.detector.logLevel | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

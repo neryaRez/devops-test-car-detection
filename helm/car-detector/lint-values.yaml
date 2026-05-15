@@ -1,0 +1,11 @@
+image:
+  repository: "example.com/car-detector"
+  tag: "lint"
+
+aws:
+  region: "us-east-1"
+
+s3:
+  videoUri: "s3://example-bucket/input/video.mp4"
+  labelsUri: "s3://example-bucket/input/labels.json"
+  outputPrefixUri: "s3://example-bucket/runs/lint/"

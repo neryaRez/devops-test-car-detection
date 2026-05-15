@@ -1,0 +1,52 @@
+image:
+  repository: ""
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+aws:
+  region: "us-east-1"
+
+s3:
+  videoUri: ""
+  labelsUri: ""
+  outputPrefixUri: ""
+
+detector:
+  yoloModel: "yolov8n.pt"
+  yoloDevice: "cpu"
+  confThreshold: "0.25"
+  iouThreshold: "0.5"
+  logLevel: "INFO"
+
+serviceAccount:
+  create: true
+  name: "car-detector"
+  iamRoleArn: ""
+
+job:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 3600
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+podSecurityContext: {}
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

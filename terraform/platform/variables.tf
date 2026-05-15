@@ -55,7 +55,7 @@ variable "enable_eks" {
 variable "eks_cluster_version" {
   type        = string
   description = "EKS Kubernetes version."
-  default     = "1.29"
+  default     = "1.32"
 }
 
 variable "helm_namespace" {
