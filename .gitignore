@@ -21,7 +21,6 @@ crash.log
 override.tf
 override.tf.json
 terraform/**/backend.generated.hcl
-data/input/
 data/frames/
 data/artifacts/
 tmp/
