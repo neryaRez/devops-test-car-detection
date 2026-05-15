@@ -1,15 +1,31 @@
+data "aws_caller_identity" "current" {}
+
+locals {
+  normalized_prefix = lower(replace(var.name_prefix, "_", "-"))
+
+  state_bucket_name = lower(
+    "${local.normalized_prefix}-tfstate-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+  )
+
+  lock_table_name = lower(
+    "${local.normalized_prefix}-tf-locks"
+  )
+}
+
 resource "aws_s3_bucket" "tfstate" {
-  bucket = "${var.name_prefix}-tfstate-${var.bucket_suffix}"
+  bucket = local.state_bucket_name
 
   tags = {
     Name        = "${var.name_prefix}-terraform-state"
     Purpose     = "terraform-remote-state"
     Environment = "shared"
+    ManagedBy   = "terraform"
   }
 }
 
 resource "aws_s3_bucket_versioning" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
+
   versioning_configuration {
     status = "Enabled"
   }
@@ -17,6 +33,7 @@ resource "aws_s3_bucket_versioning" "tfstate" {
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
+
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -34,7 +51,7 @@ resource "aws_s3_bucket_public_access_block" "tfstate" {
 }
 
 resource "aws_dynamodb_table" "tf_lock" {
-  name         = "${var.name_prefix}-tf-locks"
+  name         = local.lock_table_name
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "LockID"
 
@@ -47,5 +64,6 @@ resource "aws_dynamodb_table" "tf_lock" {
     Name        = "${var.name_prefix}-tf-locks"
     Purpose     = "terraform-state-lock"
     Environment = "shared"
+    ManagedBy   = "terraform"
   }
 }

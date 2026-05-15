@@ -1,22 +1,3 @@
-variable "name_prefix" {
-  type = string
-}
-
-variable "vpc_id" {
-  type = string
-}
-
-variable "subnet_ids" {
-  type        = list(string)
-  description = "Subnet IDs for the EKS control plane and nodes (use public subnets for this scaffold)."
-}
-
-variable "cluster_version" {
-  type        = string
-  description = "EKS Kubernetes version"
-  default     = "1.29"
-}
-
 module "cluster" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.8"
@@ -42,6 +23,6 @@ module "cluster" {
 
   tags = {
     Name        = "${var.name_prefix}-eks"
-    Environment = "test"
+    Environment = var.environment
   }
 }

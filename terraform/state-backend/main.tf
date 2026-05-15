@@ -16,7 +16,6 @@ provider "aws" {
 module "remote_state" {
   source = "../modules/remote_state_backend"
 
-  name_prefix   = var.name_prefix
-  bucket_suffix = var.bucket_suffix
-  aws_region    = var.aws_region
+  name_prefix = var.name_prefix
+  aws_region  = var.aws_region
 }

@@ -1,18 +1,10 @@
-variable "name_prefix" {
-  type = string
-}
-
-variable "bucket_suffix" {
-  type        = string
-  description = "Suffix to keep bucket name globally unique."
-}
-
 resource "aws_s3_bucket" "app" {
   bucket = "${var.name_prefix}-app-${var.bucket_suffix}"
 
   tags = {
     Name    = "${var.name_prefix}-app-data"
     Purpose = "datasets-metrics-artifacts"
+    Environment = var.environment
   }
 }
 

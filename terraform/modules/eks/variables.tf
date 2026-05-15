@@ -16,3 +16,9 @@ variable "cluster_version" {
   description = "EKS Kubernetes version"
   default     = "1.29"
 }
+
+variable "environment" {
+  type = string
+  description = "Environment name used for tagging."
+  default = "prod"
+}

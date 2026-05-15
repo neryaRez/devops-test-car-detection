@@ -1,7 +1,3 @@
-variable "name_prefix" {
-  type = string
-}
-
 resource "aws_ecr_repository" "car_detector" {
   name                 = "${var.name_prefix}-car-detector"
   image_tag_mutability = "MUTABLE"
@@ -16,5 +12,6 @@ resource "aws_ecr_repository" "car_detector" {
 
   tags = {
     Name = "${var.name_prefix}-car-detector"
+    Environment = var.environment
   }
 }

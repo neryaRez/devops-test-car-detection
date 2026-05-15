@@ -26,3 +26,7 @@ tmp/
 
 yolov8*.pt
 *.pyc
+merge_all.py
+merged_all.txt
+terraform/.generated-backends/
+terraform/**/backend.generated.hcl

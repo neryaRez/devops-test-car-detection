@@ -9,8 +9,3 @@ variable "name_prefix" {
   description = "Prefix for state bucket and lock table names"
   default     = "car-detector"
 }
-
-variable "bucket_suffix" {
-  type        = string
-  description = "Unique suffix for the Terraform state bucket name (globally unique)."
-}

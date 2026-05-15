@@ -46,8 +46,8 @@ echo "==> AWS region: ${AWS_REGION} (set AWS_REGION to override)"
 aws sts get-caller-identity >/dev/null
 
 NAME_PREFIX="${TF_NAME_PREFIX:-car-detector}"
-SUFFIX="${TF_STATE_BUCKET_SUFFIX:-$(openssl rand -hex 4)}"
-APP_SFX="${APP_BUCKET_SUFFIX:-$SUFFIX}"
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+APP_SFX="${APP_BUCKET_SUFFIX:-${ACCOUNT_ID}-${AWS_REGION}}"
 ENABLE_EKS="${ENABLE_EKS:-0}"
 BOOTSTRAP_JENKINS="${BOOTSTRAP_JENKINS:-0}"
 TRIGGER_JENKINS="${TRIGGER_JENKINS:-0}"
@@ -78,7 +78,6 @@ pushd "$ROOT/terraform/state-backend" >/dev/null
 terraform init -input=false
 terraform apply "${AUTO_APPROVE_FLAG[@]}" -input=false \
   -var="name_prefix=${NAME_PREFIX}" \
-  -var="bucket_suffix=${SUFFIX}" \
   -var="aws_region=${AWS_REGION}"
 
 STATE_BUCKET="$(terraform output -raw state_bucket_name)"
