@@ -7,7 +7,6 @@ __pycache__/
 venv/
 *.pt
 *.onnx
-*.mp4
 *.avi
 *.mov
 .DS_Store
