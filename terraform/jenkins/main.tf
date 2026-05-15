@@ -17,7 +17,7 @@ provider "aws" {
 
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"] # Canonical
+  owners      = ["099720109477"]
 
   filter {
     name   = "name"
@@ -32,26 +32,11 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_security_group" "jenkins" {
   name_prefix = "${var.name_prefix}-jenkins-"
-  description = "Jenkins controller (adjust ingress to your IP ranges)"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
-  }
-
-  ingress {
-    description = "Jenkins UI"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
-  }
+  description = "Private Jenkins controller. No inbound access; use SSM port forwarding."
+  vpc_id      = local.vpc_id
 
   egress {
+    description = "All outbound via NAT/VPC endpoints"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -63,28 +48,45 @@ resource "aws_security_group" "jenkins" {
   }
 
   tags = {
-    Name = "${var.name_prefix}-jenkins-sg"
+    Name        = "${var.name_prefix}-jenkins-sg"
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 
 resource "aws_instance" "jenkins" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
-  subnet_id              = var.subnet_id
-  vpc_security_group_ids = [aws_security_group.jenkins.id]
-  key_name               = var.ssh_key_name != "" ? var.ssh_key_name : null
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = local.jenkins_subnet_id
+  associate_public_ip_address = false
+  vpc_security_group_ids      = [aws_security_group.jenkins.id]
+  iam_instance_profile        = aws_iam_instance_profile.jenkins.name
+  key_name                    = var.ssh_key_name != "" ? var.ssh_key_name : null
+
+  user_data                   = file("${path.module}/user_data.sh")
+  user_data_replace_on_change = false
 
   root_block_device {
     volume_size = var.root_volume_gb
     volume_type = "gp3"
+    encrypted   = true
   }
 
   metadata_options {
     http_tokens = "required"
   }
 
+  lifecycle {
+    ignore_changes = [
+      ami,
+      user_data
+    ]
+  }
+
   tags = {
-    Name = "${var.name_prefix}-jenkins"
-    Role = "jenkins-controller"
+    Name        = "${var.name_prefix}-jenkins"
+    Role        = "jenkins-controller"
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }

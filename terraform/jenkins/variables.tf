@@ -1,41 +1,41 @@
 variable "aws_region" {
-  type    = string
-  default = "us-east-1"
+  type        = string
+  description = "AWS region."
+  default     = "us-east-1"
 }
 
 variable "name_prefix" {
-  type    = string
-  default = "car-detector"
+  type        = string
+  description = "Project/resource name prefix."
+  default     = "car-detector"
 }
 
-variable "vpc_id" {
+variable "environment" {
   type        = string
-  description = "VPC from platform stack (e.g. module output)."
-}
-
-variable "subnet_id" {
-  type        = string
-  description = "Public subnet for the Jenkins EC2 instance."
-}
-
-variable "admin_cidr" {
-  type        = string
-  description = "CIDR allowed to reach SSH (22) and Jenkins (8080), e.g. 203.0.113.10/32"
-  default     = "0.0.0.0/0"
+  description = "Environment name."
+  default     = "test"
 }
 
 variable "instance_type" {
-  type    = string
-  default = "t3.medium"
+  type        = string
+  description = "Jenkins EC2 instance type."
+  default     = "t3.medium"
+}
+
+variable "root_volume_gb" {
+  type        = number
+  description = "Root EBS volume size in GiB."
+  default     = 50
 }
 
 variable "ssh_key_name" {
   type        = string
-  description = "Optional EC2 key pair name for SSH."
+  description = "Optional EC2 key pair name. Not required when using SSM."
   default     = ""
 }
 
-variable "root_volume_gb" {
-  type    = number
-  default = 50
+variable "jenkins_port" {
+  type        = number
+  description = "Jenkins UI port used for SSM port forwarding."
+  default     = 8080
 }

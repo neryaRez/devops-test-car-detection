@@ -131,12 +131,160 @@ LOG_LEVEL=INFO
 --- END: config/.env.example ---
 
 --- START: helm/car-detector/Chart.yaml ---
-
+apiVersion: v2
+name: car-detector
+description: Helm chart for running the YOLOv8 car detector as a Kubernetes Job
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
 --- END: helm/car-detector/Chart.yaml ---
 
---- START: helm/car-detector/values.yaml ---
+--- START: helm/car-detector/lint-values.yaml ---
+image:
+  repository: "example.com/car-detector"
+  tag: "lint"
 
+aws:
+  region: "us-east-1"
+
+s3:
+  videoUri: "s3://example-bucket/input/video.mp4"
+  labelsUri: "s3://example-bucket/input/labels.json"
+  outputPrefixUri: "s3://example-bucket/runs/lint/"
+--- END: helm/car-detector/lint-values.yaml ---
+
+--- START: helm/car-detector/values.yaml ---
+image:
+  repository: ""
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+aws:
+  region: "us-east-1"
+
+s3:
+  videoUri: ""
+  labelsUri: ""
+  outputPrefixUri: ""
+
+detector:
+  yoloModel: "yolov8n.pt"
+  yoloDevice: "cpu"
+  confThreshold: "0.25"
+  iouThreshold: "0.5"
+  logLevel: "INFO"
+
+serviceAccount:
+  create: true
+  name: "car-detector"
+  iamRoleArn: ""
+
+job:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: 3600
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+podSecurityContext: {}
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
 --- END: helm/car-detector/values.yaml ---
+
+--- START: helm/car-detector/templates/job.yaml ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "car-detector.fullname" . }}-{{ .Release.Revision }}
+  labels:
+    {{- include "car-detector.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "car-detector.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "car-detector.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: car-detector
+          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.aws.region | quote }}
+            - name: S3_VIDEO_URI
+              value: {{ required "s3.videoUri is required" .Values.s3.videoUri | quote }}
+            - name: S3_LABELS_URI
+              value: {{ required "s3.labelsUri is required" .Values.s3.labelsUri | quote }}
+            - name: S3_OUTPUT_PREFIX_URI
+              value: {{ required "s3.outputPrefixUri is required" .Values.s3.outputPrefixUri | quote }}
+            - name: YOLO_MODEL
+              value: {{ .Values.detector.yoloModel | quote }}
+            - name: YOLO_DEVICE
+              value: {{ .Values.detector.yoloDevice | quote }}
+            - name: CONF_THRESHOLD
+              value: {{ .Values.detector.confThreshold | quote }}
+            - name: IOU_THRESHOLD
+              value: {{ .Values.detector.iouThreshold | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.detector.logLevel | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+--- END: helm/car-detector/templates/job.yaml ---
+
+--- START: helm/car-detector/templates/serviceaccount.yaml ---
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "car-detector.serviceAccountName" . }}
+  labels:
+    {{- include "car-detector.labels" . | nindent 4 }}
+  {{- if .Values.serviceAccount.iamRoleArn }}
+  annotations:
+    eks.amazonaws.com/role-arn: {{ .Values.serviceAccount.iamRoleArn | quote }}
+  {{- end }}
+{{- end }}
+--- END: helm/car-detector/templates/serviceaccount.yaml ---
 
 --- START: terraform/state-backend/main.tf ---
 terraform {
@@ -793,22 +941,41 @@ module "cluster" {
   vpc_id     = var.vpc_id
   subnet_ids = var.subnet_ids
 
-  cluster_endpoint_public_access  = true
-  cluster_endpoint_private_access = false
+  cluster_endpoint_private_access      = true
+  cluster_endpoint_public_access       = var.cluster_endpoint_public_access
+  cluster_endpoint_public_access_cidrs = var.cluster_endpoint_public_access_cidrs
+
+  enable_cluster_creator_admin_permissions = true
 
   eks_managed_node_groups = {
     default = {
       name           = "${var.name_prefix}-default"
-      instance_types = ["t3.medium"]
-      min_size       = 1
-      max_size       = 4
-      desired_size   = 2
+      instance_types = var.node_instance_types
+
+      min_size     = var.node_min_size
+      max_size     = var.node_max_size
+      desired_size = var.node_desired_size
+
+      capacity_type = var.node_capacity_type
+      disk_size     = var.node_disk_size
+
+      subnet_ids = var.subnet_ids
+
+      labels = {
+        workload = "car-detector"
+      }
+
+      tags = {
+        Name        = "${var.name_prefix}-eks-node"
+        Environment = var.environment
+      }
     }
   }
 
   tags = {
     Name        = "${var.name_prefix}-eks"
     Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 --- END: terraform/modules/eks/main.tf ---
@@ -834,34 +1001,83 @@ output "oidc_provider_arn" {
 
 --- START: terraform/modules/eks/variables.tf ---
 variable "name_prefix" {
-  type = string
+  type        = string
+  description = "Project/resource name prefix."
+}
+
+variable "environment" {
+  type        = string
+  description = "Environment name used for tagging."
 }
 
 variable "vpc_id" {
-  type = string
+  type        = string
+  description = "VPC ID where EKS will be created."
 }
 
 variable "subnet_ids" {
   type        = list(string)
-  description = "Subnet IDs for the EKS control plane and nodes (use public subnets for this scaffold)."
+  description = "Private subnet IDs for the EKS control plane networking and managed nodes."
 }
 
 variable "cluster_version" {
   type        = string
-  description = "EKS Kubernetes version"
-  default     = "1.29"
+  description = "EKS Kubernetes version."
+  default     = "1.32"
 }
 
-variable "environment" {
-  type = string
-  description = "Environment name used for tagging."
-  default = "test"
+variable "cluster_endpoint_public_access" {
+  type        = bool
+  description = "Whether to expose the EKS API endpoint publicly. Default is false for private-first operation."
+  default     = false
+}
+
+variable "cluster_endpoint_public_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to access the public EKS endpoint if public access is enabled."
+  default     = []
+}
+
+variable "node_instance_types" {
+  type        = list(string)
+  description = "EC2 instance types for the EKS managed node group."
+  default     = ["t3.medium"]
+}
+
+variable "node_min_size" {
+  type        = number
+  description = "Minimum number of EKS worker nodes."
+  default     = 1
+}
+
+variable "node_max_size" {
+  type        = number
+  description = "Maximum number of EKS worker nodes."
+  default     = 3
+}
+
+variable "node_desired_size" {
+  type        = number
+  description = "Desired number of EKS worker nodes."
+  default     = 1
+}
+
+variable "node_capacity_type" {
+  type        = string
+  description = "EKS node capacity type: ON_DEMAND or SPOT."
+  default     = "ON_DEMAND"
+}
+
+variable "node_disk_size" {
+  type        = number
+  description = "Disk size in GiB for EKS worker nodes."
+  default     = 30
 }
 --- END: terraform/modules/eks/variables.tf ---
 
 --- START: terraform/modules/ecr/main.tf ---
 resource "aws_ecr_repository" "car_detector" {
-  name                 = "${var.name_prefix}-car-detector"
+  name                 = var.name_prefix
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -964,7 +1180,7 @@ module "s3_app_data" {
   source        = "../modules/s3_app_data"
   name_prefix   = var.name_prefix
   bucket_suffix = local.app_bucket_suffix
-  environment = var.environment
+  environment   = var.environment
 }
 
 module "eks" {
@@ -972,10 +1188,20 @@ module "eks" {
   source = "../modules/eks"
 
   name_prefix     = var.name_prefix
+  environment     = var.environment
   vpc_id          = module.network.vpc_id
   subnet_ids      = module.network.private_subnet_ids
   cluster_version = var.eks_cluster_version
-  environment     = var.environment
+
+  cluster_endpoint_public_access       = var.eks_endpoint_public_access
+  cluster_endpoint_public_access_cidrs = var.eks_endpoint_public_access_cidrs
+
+  node_instance_types = var.eks_node_instance_types
+  node_min_size       = var.eks_node_min_size
+  node_max_size       = var.eks_node_max_size
+  node_desired_size   = var.eks_node_desired_size
+  node_capacity_type  = var.eks_node_capacity_type
+  node_disk_size      = var.eks_node_disk_size
 }
 --- END: terraform/platform/main.tf ---
 
@@ -1063,6 +1289,20 @@ resource "aws_ssm_parameter" "detector_service_account_name" {
   type  = "String"
   value = var.detector_service_account_name
 }
+
+resource "aws_ssm_parameter" "vpc_id" {
+  name      = "${local.ssm_prefix}/vpc-id"
+  type      = "String"
+  value     = module.network.vpc_id
+  overwrite = true
+}
+
+resource "aws_ssm_parameter" "private_subnet_ids" {
+  name      = "${local.ssm_prefix}/private-subnet-ids"
+  type      = "StringList"
+  value     = join(",", module.network.private_subnet_ids)
+  overwrite = true
+}
 --- END: terraform/platform/ssm_variables.tf ---
 
 --- START: terraform/platform/variables.tf ---
@@ -1123,7 +1363,7 @@ variable "enable_eks" {
 variable "eks_cluster_version" {
   type        = string
   description = "EKS Kubernetes version."
-  default     = "1.29"
+  default     = "1.32"
 }
 
 variable "helm_namespace" {
@@ -1136,6 +1376,54 @@ variable "detector_service_account_name" {
   type        = string
   description = "Kubernetes ServiceAccount name used by the detector pod."
   default     = "car-detector"
+}
+
+variable "eks_endpoint_public_access" {
+  type        = bool
+  description = "Whether to expose the EKS API endpoint publicly. Default false; Jenkins/SSM should manage the cluster from inside the VPC."
+  default     = false
+}
+
+variable "eks_endpoint_public_access_cidrs" {
+  type        = list(string)
+  description = "CIDRs allowed to reach the public EKS API endpoint if enabled."
+  default     = []
+}
+
+variable "eks_node_instance_types" {
+  type        = list(string)
+  description = "EC2 instance types for the EKS managed node group."
+  default     = ["t3.medium"]
+}
+
+variable "eks_node_min_size" {
+  type        = number
+  description = "Minimum number of EKS worker nodes."
+  default     = 1
+}
+
+variable "eks_node_max_size" {
+  type        = number
+  description = "Maximum number of EKS worker nodes."
+  default     = 3
+}
+
+variable "eks_node_desired_size" {
+  type        = number
+  description = "Desired number of EKS worker nodes."
+  default     = 1
+}
+
+variable "eks_node_capacity_type" {
+  type        = string
+  description = "EKS node capacity type: ON_DEMAND or SPOT."
+  default     = "ON_DEMAND"
+}
+
+variable "eks_node_disk_size" {
+  type        = number
+  description = "Disk size in GiB for EKS worker nodes."
+  default     = 30
 }
 --- END: terraform/platform/variables.tf ---
 
