@@ -15,8 +15,8 @@ set -euo pipefail
 # 6. Prints Jenkins access instructions through SSM port forwarding.
 #
 # Usage:
-#   chmod +x scripts/run_start.sh
-#   ./scripts/run_start.sh --yes
+#   chmod +x scripts/start_build_infra.sh
+#   ./scripts/start_build_infra.sh --yes
 #
 # Optional env vars:
 #   AWS_REGION=us-east-1
@@ -98,15 +98,57 @@ install_terraform_if_missing() {
 
 install_session_manager_plugin_if_possible() {
   if command -v session-manager-plugin >/dev/null 2>&1; then
+    echo "Session Manager plugin already installed"
+    session-manager-plugin --version || true
     return 0
   fi
 
-  if [[ -x "${ROOT}/scripts/install_plugin_ssm.sh" ]]; then
-    log "Session Manager plugin not found. Installing through scripts/install_plugin_ssm.sh"
-    "${ROOT}/scripts/install_plugin_ssm.sh"
+  log "Session Manager plugin not found. Trying to install it."
+
+  if [[ "$(uname -s)" != "Linux" ]]; then
+    warn "Automatic Session Manager Plugin install is supported only on Linux."
+    warn "Install it manually before using SSM port forwarding."
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl is missing. Cannot auto-install Session Manager Plugin."
+    return 0
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    warn "sudo is missing. Cannot auto-install Session Manager Plugin."
+    return 0
+  fi
+
+  ARCH="$(uname -m)"
+
+  case "$ARCH" in
+    x86_64|amd64)
+      PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb"
+      ;;
+    aarch64|arm64)
+      PLUGIN_URL="https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_arm64/session-manager-plugin.deb"
+      ;;
+    *)
+      warn "Unsupported architecture for automatic Session Manager Plugin install: $ARCH"
+      warn "Install Session Manager Plugin manually before using SSM port forwarding."
+      return 0
+      ;;
+  esac
+
+  TMP_DEB="$(mktemp /tmp/session-manager-plugin.XXXXXX.deb)"
+
+  curl -fsSL "$PLUGIN_URL" -o "$TMP_DEB"
+  sudo dpkg -i "$TMP_DEB"
+  rm -f "$TMP_DEB"
+
+  if command -v session-manager-plugin >/dev/null 2>&1; then
+    echo "Session Manager plugin installed successfully"
+    session-manager-plugin --version || true
   else
-    warn "session-manager-plugin is not installed."
-    warn "SSM port forwarding will not work from this machine until you install it."
+    warn "Session Manager plugin installation may have failed."
+    warn "Install it manually before using SSM port forwarding."
   fi
 }
 
