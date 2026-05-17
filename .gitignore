@@ -31,3 +31,7 @@ merged_all.txt
 terraform/.generated-backends/
 terraform/**/backend.generated.hcl
 .terraform-backends/
+
+# Generated Terraform backend configs
+terraform/.generated-backends/
+terraform/**/backend.generated.hcl
