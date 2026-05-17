@@ -44,7 +44,7 @@ pipeline {
 
     stage('Check tools') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
 
           echo "==> Checking tools"
@@ -68,7 +68,7 @@ pipeline {
 
     stage('Prepare config from AWS') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
 
           echo "==> Detecting AWS identity"
@@ -161,7 +161,7 @@ EOF
 
     stage('Run unit tests') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
 
           echo "==> Running lightweight unit tests"
@@ -178,7 +178,7 @@ EOF
 
     stage('Ensure S3 bucket and sample data') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -236,7 +236,7 @@ EOF
 
     stage('Docker Compose build') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
 
           echo "==> Building image with docker compose"
@@ -247,7 +247,7 @@ EOF
 
     stage('Docker Compose run detector') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -294,7 +294,7 @@ EOF
 
     stage('Verify metrics thresholds') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
           . ./compose-metrics.env
@@ -351,7 +351,7 @@ PY
 
     stage('Ensure ECR repository') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -376,7 +376,7 @@ PY
 
     stage('Tag and push image to ECR') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -399,7 +399,7 @@ PY
 
     stage('Helm lint') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
 
           echo "==> Helm lint"
@@ -410,7 +410,7 @@ PY
 
     stage('Deploy to EKS with Helm') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -455,7 +455,7 @@ PY
 
     stage('Wait for EKS job and print logs') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -483,7 +483,7 @@ PY
 
     stage('Verify final S3 output') {
       steps {
-        sh '''
+        sh '''#!/usr/bin/env bash
           set -euo pipefail
           . ./ci.env
 
@@ -506,7 +506,7 @@ PY
 
   post {
     success {
-      sh '''
+      sh '''#!/usr/bin/env bash
         set -e
 
         if [ -f ./ci.env ]; then
