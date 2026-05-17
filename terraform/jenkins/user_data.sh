@@ -21,7 +21,10 @@ apt-get install -y \
   apt-transport-https \
   software-properties-common \
   fontconfig \
-  openjdk-21-jre
+  openjdk-21-jre \
+  python3 \
+  python3-pip \
+  python3-venv \
 
 echo "==> Installing Jenkins"
 
