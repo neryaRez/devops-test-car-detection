@@ -1,37 +1,44 @@
+# Python
 __pycache__/
 *.py[cod]
+*.pyc
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .venv/
 venv/
+
+# Python/build/test artifacts
+*.log
+tmp/
+data/frames/
+data/artifacts/
+
+# Environment files
+.env
+.env.*
+
+# OS/editor files
+.DS_Store
+
+# ML/model/video artifacts
 *.pt
+yolov8*.pt
 *.onnx
 *.avi
 *.mov
-.DS_Store
-*.log
-.env
-.env.*
+
+# Terraform local/generated files
 .terraform/
 *.tfstate
 *.tfstate.*
 crash.log
 override.tf
 override.tf.json
-terraform/**/backend.generated.hcl
-data/frames/
-data/artifacts/
-tmp/
-
-yolov8*.pt
-*.pyc
-merge_all.py
-merged_all.txt
 terraform/.generated-backends/
 terraform/**/backend.generated.hcl
 .terraform-backends/
 
-# Generated Terraform backend configs
-terraform/.generated-backends/
-terraform/**/backend.generated.hcl
+# Local helper/generated files
+merge_all.py
+merged_all.txt
